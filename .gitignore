@@ -1,0 +1,5 @@
+build/
+.pixi/
+*.swp
+.vscode/
+.idea/

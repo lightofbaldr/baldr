@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>baldr — chat</title>
+  <style>
+    body { font-family: ui-monospace, SFMono-Regular, monospace; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    h1 { font-size: 1.2rem; }
+    .msg { padding: 0.5rem 0.75rem; margin: 0.4rem 0; border-radius: 0.4rem; background: #f3f5fa; }
+    .msg .who { font-weight: 600; color: #0366d6; }
+    .msg .when { float: right; font-size: 0.8rem; color: #888; }
+    form { margin-top: 1rem; display: flex; gap: 0.5rem; }
+    input[type=text] { flex: 1; padding: 0.5rem; border: 1px solid #ccc; border-radius: 0.3rem; font-family: inherit; }
+    button { padding: 0.5rem 0.9rem; border: 0; border-radius: 0.3rem; background: #0366d6; color: white; cursor: pointer; }
+    .empty { color: #888; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>baldr — chat</h1>
+  <p>Single-pane chat. Auto-escaping HTML via <code>baldr.Templates</code>. State lives in the dispatcher struct between requests.</p>
+  <p><strong>{{ count }}</strong> message{{ count_suffix }} so far.</p>
+
+  <div id="messages">
+    {% if count == 0 %}
+      <p class="empty">No messages yet. Be the first.</p>
+    {% else %}
+      {% for m in messages %}
+        <div class="msg">
+          <span class="when">#{{ m.id }}</span>
+          <span class="who">{{ m.who }}</span>
+          {{ m.body }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+
+  <form method="post" action="/api/send">
+    <input type="text" name="who" placeholder="name" value="{{ default_who }}" required>
+    <input type="text" name="body" placeholder="say something" required>
+    <button type="submit">send</button>
+  </form>
+</body>
+</html>
