@@ -102,29 +102,88 @@ def socket_close(fd: c_int) -> None:
     _ = external_call["close", c_int, c_int](fd)
 
 
-def read_request(fd: c_int) -> List[UInt8]:
-    """Read up to READ_BUFFER_SIZE bytes from the client via recv().
+def _find_header_end(buf: List[UInt8]) -> Int:
+    """Return the index just past the CRLFCRLF header terminator, or -1 if the
+    headers aren't fully received yet."""
+    var n = len(buf)
+    var i = 0
+    while i + 3 < n:
+        if buf[i] == 13 and buf[i + 1] == 10 and buf[i + 2] == 13 and buf[i + 3] == 10:
+            return i + 4
+        i += 1
+    return -1
 
-    Enough for GET requests with no body and headers under ~4 KB. A real
-    implementation loops until it's seen `\r\n\r\n` plus Content-Length bytes.
+
+def _content_length(buf: List[UInt8], header_end: Int) -> Int:
+    """Case-insensitively find `Content-Length:` within the header bytes
+    [0, header_end) and return its value; -1 if the header is absent."""
+    var token = String("content-length:")
+    var tb = token.as_bytes()
+    var tlen = len(tb)
+    var i = 0
+    while i + tlen <= header_end:
+        var is_match = True
+        for j in range(tlen):
+            var c = Int(buf[i + j])
+            if c >= 65 and c <= 90:  # 'A'-'Z' -> lowercase
+                c += 32
+            if c != Int(tb[j]):
+                is_match = False
+                break
+        if is_match:
+            var k = i + tlen
+            while k < header_end and (buf[k] == 32 or buf[k] == 9):  # skip ws
+                k += 1
+            var v = 0
+            var seen = False
+            while k < header_end and buf[k] >= 48 and buf[k] <= 57:
+                v = v * 10 + (Int(buf[k]) - 48)
+                seen = True
+                k += 1
+            if seen:
+                return v
+            return -1
+        i += 1
+    return -1
+
+
+def read_request(fd: c_int) -> List[UInt8]:
+    """Read a full HTTP/1.1 request. Loops recv() until the CRLFCRLF header
+    terminator is seen, then keeps reading until Content-Length body bytes have
+    arrived — so request bodies larger than one recv buffer (e.g. a large JSON
+    POST) are received intact, not truncated at READ_BUFFER_SIZE.
 
     Uses `recv` (not `read`) because the Mojo stdlib already binds `write`/
     `read` symbols internally for its own file-descriptor abstraction, and
     duplicate external_call symbol declarations are a hard compile error.
     """
+    var out = List[UInt8]()
     var buf = List[UInt8](capacity=READ_BUFFER_SIZE)
     for _ in range(READ_BUFFER_SIZE):
         buf.append(0)
-    var n = external_call[
-        "recv", c_size_t,
-        c_int, UnsafePointer[UInt8, origin_of(buf)], c_size_t, c_int,
-    ](fd, buf.unsafe_ptr(), c_size_t(READ_BUFFER_SIZE), c_int(0))
-    var got = Int(n)
-    if got <= 0:
-        return List[UInt8]()
-    var out = List[UInt8](capacity=got)
-    for i in range(got):
-        out.append(buf[i])
+    var header_end = -1
+    var content_length = -1
+    while True:
+        var n = external_call[
+            "recv", c_size_t,
+            c_int, UnsafePointer[UInt8, origin_of(buf)], c_size_t, c_int,
+        ](fd, buf.unsafe_ptr(), c_size_t(READ_BUFFER_SIZE), c_int(0))
+        var got = Int(n)
+        if got <= 0:
+            break
+        for i in range(got):
+            out.append(buf[i])
+        # Re-scan the full accumulator for the header terminator (it may land
+        # across a recv boundary). Parse Content-Length once headers complete.
+        if header_end < 0:
+            header_end = _find_header_end(out)
+            if header_end >= 0:
+                content_length = _content_length(out, header_end)
+        if header_end >= 0:
+            if content_length <= 0:
+                break  # no body expected (GET, or no Content-Length)
+            if len(out) >= header_end + content_length:
+                break  # full body received
     return out^
 
 
