@@ -53,7 +53,8 @@ based.
 | Routing, static files, safe path joins | `baldr.serve` + `baldr.app` | URL → handler dispatch, `/static/` serving |
 | HTML rendering, auto-escape | `baldr.template` + `baldr.templates` | Jinja2-shaped expressions, filters, file-system discovery |
 | JSON in / out | `baldr.json` | RFC 8259 parser + emitter |
-| Persistent state | `baldr.queue.cpu` + `baldr.queue.gpu` | Queue + KV + Tasks, SIMD substring scan, GPU-resident fallback |
+| Persistent state | `baldr.db` · `baldr.queue` | SQLite over libsqlite3 (rows in, rows out); an in-process CPU/SIMD queue + KV + tasks store (the GPU backend lives in `mojo-gpuq`) |
+| Streaming | `baldr.streaming` | chunked responses and Server-Sent Events through a `StreamHandler`; keep-alive in the accept loop |
 | GPU memory cap shim (optional) | `mojo-cudart-shim` (separate repo) | LD_PRELOAD interposer for unified-memory hosts |
 | Middleware | `baldr.middleware.*` | security_headers, ratelimit, logger |
 

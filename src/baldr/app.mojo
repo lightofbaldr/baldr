@@ -46,9 +46,11 @@ from std.pathlib import Path
 from .http import (
     socket_create, socket_reuseaddr, make_sockaddr_in,
     socket_bind, socket_listen, socket_accept, socket_close,
-    read_request, write_all, socket_peer_ip,
+    read_request, read_request_from, write_all, socket_peer_ip, wants_keep_alive,
     process_fork, process_wait, process_getpid,
+    READ_TIMEOUT_SECS, KEEPALIVE_IDLE_SECS,
 )
+from .streaming import ResponseStream
 from .request import Request, parse_request
 from .response import Response
 from .router import (
@@ -84,6 +86,19 @@ trait RouteHandler(Movable, Deinitable):
     handler rather than binding each route to a function; threading the
     resolved name in keeps the handler from re-deriving it.)"""
     def __call__(mut self, req: Request, params: Params, name: String) raises -> Response: ...
+
+
+trait StreamHandler(Movable, Deinitable):
+    """A handler that writes its response incrementally. `App.run()` /
+    `serve_connection()` hand it the parsed request and a `ResponseStream`
+    bound to the client socket; the handler calls `out.start(...)`, then
+    `out.write(...)` / `out.send_event(...)` as data becomes available, and
+    `out.finish()`. The App finishes an unfinished stream on return, renders
+    the error handler's 500 if the handler raises before `start()`, and
+    closes the connection if it raises after. Middleware `before` hooks run
+    (and may short-circuit with a buffered response); `after` hooks do not —
+    the headers are already on the wire. Static and asset mounts still win."""
+    def __call__(mut self, req: Request, mut out: ResponseStream) raises: ...
 
 
 struct StaticMount(Copyable, Movable):
@@ -386,68 +401,193 @@ struct App[
             raise Error(String("baldr: listen() failed"))
         return sock
 
-    def _accept_forever[H: RouteHandler](mut self, sock: c_int, mut handler: H, use_router: Bool) raises:
-        """The serial accept loop: accept → read → pipeline → write → close."""
+    # ── One connection ───────────────────────────────────────────────────
+    # A connection is served as a keep-alive loop: read a request (15 s
+    # budget for the first, KEEPALIVE_IDLE_SECS for each next one), run the
+    # pipeline, write the response with the `Connection:` header the loop
+    # decided on, and go again while the client wants to (HTTP/1.1 default,
+    # HTTP/1.0 opt-in). The caller owns and closes the descriptor.
+
+    def _read_one(self, fd: c_int, first: Bool, mut pending: List[UInt8], mut req: Request) -> Int:
+        """0 = connection done (EOF / timeout / oversize), 1 = parsed into
+        `req`, 2 = bytes arrived but did not parse. `pending` carries any
+        pipelined bytes between calls."""
+        var raw = read_request_from(fd, pending, timeout_secs=READ_TIMEOUT_SECS if first else KEEPALIVE_IDLE_SECS)
+        if len(raw) == 0:
+            return 0
+        try:
+            req = parse_request(raw, socket_peer_ip(fd))
+            return 1
+        except:
+            return 2
+
+    def _serve_connection_buffered[H: RouteHandler](mut self, fd: c_int, mut handler: H, use_router: Bool) raises:
+        var first = True
+        var pending = List[UInt8]()
         while True:
-            var client = socket_accept(sock)
-            if Int(client) < 0:
+            var req = Request()
+            var state = self._read_one(fd, first, pending, req)
+            first = False
+            if state == 0:
+                return
+            if state == 2:
+                var bad = self.errors.render_error(400, String("Bad Request"), req)
+                var bad_bytes = bad.to_bytes(False)
+                write_all(fd, bad_bytes)
+                return
+            var keep = wants_keep_alive(req)
+            var resp = self._pipeline(handler, req, use_router)
+            var resp_bytes = resp.to_bytes(keep)
+            write_all(fd, resp_bytes)
+            if not keep:
+                return
+
+    def serve_connection[H: RouteHandler](mut self, fd: c_int, mut handler: H) raises:
+        """Serve every request on an already-connected socket with the full
+        pipeline (route table resolved), honouring keep-alive; returns when
+        the client is done. Does not close `fd`. `run()` calls this per
+        accepted connection; tests call it on one end of a socket pair."""
+        self._serve_connection_buffered(fd, handler, True)
+
+    def serve_connection[H: DispatchHandler](mut self, fd: c_int, mut handler: H) raises:
+        """`serve_connection` for a `DispatchHandler` (route table ignored)."""
+        var first = True
+        var pending = List[UInt8]()
+        while True:
+            var req = Request()
+            var state = self._read_one(fd, first, pending, req)
+            first = False
+            if state == 0:
+                return
+            if state == 2:
+                var bad = self.errors.render_error(400, String("Bad Request"), req)
+                var bad_bytes = bad.to_bytes(False)
+                write_all(fd, bad_bytes)
+                return
+            var keep = wants_keep_alive(req)
+            var resp = self.handle(handler, req)
+            var resp_bytes = resp.to_bytes(keep)
+            write_all(fd, resp_bytes)
+            if not keep:
+                return
+
+    def serve_connection[H: StreamHandler](mut self, fd: c_int, mut handler: H) raises:
+        """`serve_connection` for a `StreamHandler`: mounts and middleware
+        `before` still answer with buffered responses; otherwise the handler
+        writes the response itself through a `ResponseStream` on `fd`. The
+        connection stays open for the next request only if the handler
+        finished its stream cleanly and the client wants keep-alive."""
+        var first = True
+        var pending = List[UInt8]()
+        while True:
+            var req = Request()
+            var state = self._read_one(fd, first, pending, req)
+            first = False
+            if state == 0:
+                return
+            if state == 2:
+                var bad = self.errors.render_error(400, String("Bad Request"), req)
+                var bad_bytes = bad.to_bytes(False)
+                write_all(fd, bad_bytes)
+                return
+            var keep = wants_keep_alive(req)
+            var buffered = Response()
+            var have_buffered = self._serve_mounted(req, buffered)
+            if not have_buffered:
+                try:
+                    var pre = self.middleware.before(req)
+                    if pre.status != MW_PASS:
+                        buffered = pre^
+                        have_buffered = True
+                except e:
+                    buffered = self.errors.render_error(500, String("Internal Server Error"), req)
+                    have_buffered = True
+            if have_buffered:
+                var out_bytes = buffered.to_bytes(keep)
+                write_all(fd, out_bytes)
+                if not keep:
+                    return
                 continue
-            var raw = read_request(client)
-            if len(raw) == 0:
-                socket_close(client)
-                continue
-            var resp: Response
-            var req: Request
-            var parsed = True
+            var out = ResponseStream(fd)
+            var broke = False
             try:
-                req = parse_request(raw, socket_peer_ip(client))
-            except:
-                req = Request()
-                parsed = False
-            if parsed:
-                resp = self._pipeline(handler, req, use_router)
+                handler(req, out)
+            except e:
+                if not out.started():
+                    var err = self.errors.render_error(500, String("Internal Server Error"), req)
+                    var err_bytes = err.to_bytes(False)
+                    write_all(fd, err_bytes)
+                    return
+                broke = True
+            if not out.finished():
+                try:
+                    out.finish()
+                except:
+                    broke = True
+            if broke or not keep:
+                return
+
+    # ── The accept loop + prefork pool ───────────────────────────────────
+    def _spawn_workers(self, workers: Int, host: String, port: Int, routes: String) raises -> Bool:
+        """Single-process mode returns True at once. Prefork mode forks
+        `workers` children that each return True (serve), while the parent
+        waits for them all and returns False. Each worker inherits this App
+        and the handler by fork, so per-worker state (counters, rate-limit
+        tables) diverges by design — shared state belongs in baldr.db or
+        baldr.queue."""
+        if workers <= 1:
+            print("[baldr] listening on " + host + " port " + String(port) + " (routes: " + routes + ")")
+            return True
+        print("[baldr] prefork: " + String(workers) + " workers on " + host + " port "
+              + String(port) + " (parent pid " + String(Int(process_getpid()))
+              + ", routes: " + routes + ")")
+        var spawned = 0
+        for i in range(workers):
+            var pid = Int(process_fork())
+            if pid == 0:
+                print("[baldr] worker " + String(i) + " pid " + String(Int(process_getpid())) + " ready")
+                return True
+            elif pid > 0:
+                spawned += 1
             else:
-                resp = self.errors.render_error(400, String("Bad Request"), req)
-            var resp_bytes = resp.to_bytes()
-            write_all(client, resp_bytes)
-            socket_close(client)
+                raise Error(String("baldr: fork() failed"))
+        # Parent: block until the workers are gone (Ctrl-C kills the whole
+        # process group).
+        var alive = spawned
+        while alive > 0:
+            var w = Int(process_wait())
+            if w > 0:
+                alive -= 1
+            else:
+                break
+        return False
 
     def _serve_loop[H: RouteHandler](mut self, var handler: H, use_router: Bool, host: String, port: Int, workers: Int) raises:
         self.lifecycle.on_startup()
         try:
             var sock = self._listen(host, port)
             var routes = String(len(self.router.entries) if use_router else 0)
-            if workers <= 1:
-                print("[baldr] listening on " + host + " port " + String(port) + " (routes: " + routes + ")")
-                self._accept_forever(sock, handler, use_router)
-            else:
-                # Prefork: the parent binds and listens, then forks N workers
-                # that accept on the shared socket (the kernel load-balances).
-                # Each worker inherits this App and the handler by fork, so
-                # per-worker state (counters, rate-limit tables) diverges by
-                # design — shared state belongs in baldr.db or baldr.queue.
-                print("[baldr] prefork: " + String(workers) + " workers on " + host + " port "
-                      + String(port) + " (parent pid " + String(Int(process_getpid()))
-                      + ", routes: " + routes + ")")
-                var spawned = 0
-                for i in range(workers):
-                    var pid = Int(process_fork())
-                    if pid == 0:
-                        print("[baldr] worker " + String(i) + " pid " + String(Int(process_getpid())) + " ready")
-                        self._accept_forever(sock, handler, use_router)
-                    elif pid > 0:
-                        spawned += 1
-                    else:
-                        raise Error(String("baldr: fork() failed"))
-                # Parent: block until the workers are gone (Ctrl-C kills the
-                # whole process group).
-                var alive = spawned
-                while alive > 0:
-                    var w = Int(process_wait())
-                    if w > 0:
-                        alive -= 1
-                    else:
-                        break
+            if self._spawn_workers(workers, host, port, routes):
+                while True:
+                    var client = socket_accept(sock)
+                    if Int(client) < 0:
+                        continue
+                    self._serve_connection_buffered(client, handler, use_router)
+                    socket_close(client)
+        finally:
+            self.lifecycle.on_shutdown()
+
+    def _serve_loop_stream[H: StreamHandler](mut self, var handler: H, host: String, port: Int, workers: Int) raises:
+        self.lifecycle.on_startup()
+        try:
+            var sock = self._listen(host, port)
+            if self._spawn_workers(workers, host, port, String("stream")):
+                while True:
+                    var client = socket_accept(sock)
+                    if Int(client) < 0:
+                        continue
+                    self.serve_connection(client, handler)
+                    socket_close(client)
         finally:
             self.lifecycle.on_shutdown()
 
@@ -462,8 +602,9 @@ struct App[
         """Bind and serve forever. The route table is resolved before each
         call to the handler (405 with `Allow` / 404 on a miss) when routes
         are registered; otherwise the handler receives empty params.
-        `workers > 1` preforks that many processes sharing the listening
-        socket, each running the full pipeline."""
+        Connections are kept alive per `wants_keep_alive`. `workers > 1`
+        preforks that many processes sharing the listening socket, each
+        running the full pipeline."""
         self._serve_loop(handler^, True, host, port, workers)
 
     def run[H: DispatchHandler](
@@ -476,6 +617,18 @@ struct App[
         """Bind and serve forever with a `DispatchHandler`: the handler routes
         by hand, so the route table is not consulted. `workers > 1` preforks."""
         self._serve_loop(_RouteAdapter(handler^), False, host, port, workers)
+
+    def run[H: StreamHandler](
+        mut self,
+        var handler: H,
+        host: String = String("0.0.0.0"),
+        port: Int = 8080,
+        workers: Int = 1,
+    ) raises:
+        """Bind and serve forever with a `StreamHandler`: each request gets a
+        `ResponseStream` on the client socket (chunked, SSE-capable). Mounts
+        and middleware `before` still apply; `workers > 1` preforks."""
+        self._serve_loop_stream(handler^, host, port, workers)
 
     # ── Deprecated v0.1 runners ──────────────────────────────────────────
     # Kept so every v0.1 call site still compiles. Each is the one `run`

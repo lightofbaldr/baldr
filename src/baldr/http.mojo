@@ -128,6 +128,14 @@ def socket_close(fd: c_int) -> None:
     _ = external_call["close", c_int, c_int](fd)
 
 
+def socket_shutdown_write(fd: c_int) -> Bool:
+    """`shutdown(fd, SHUT_WR)`: signal end-of-input to the peer while keeping
+    the read side open. Tests use it so a served connection sees EOF after the
+    requests they wrote up front."""
+    var rc = external_call["shutdown", c_int, c_int, c_int](fd, c_int(1))
+    return Int(rc) == 0
+
+
 def socket_pair() raises -> Tuple[c_int, c_int]:
     """Create a connected AF_UNIX stream-socket pair for transport tests."""
     var fds = List[c_int](capacity=2)
@@ -269,7 +277,10 @@ def _content_length(buf: List[UInt8], header_end: Int) -> Int:
     return -1
 
 
-def read_request(fd: c_int, max_body_bytes: Int = DEFAULT_MAX_BODY_BYTES) -> List[UInt8]:
+comptime KEEPALIVE_IDLE_SECS: Int = 2                  # wait for the NEXT request on a kept-alive connection
+
+
+def read_request(fd: c_int, max_body_bytes: Int = DEFAULT_MAX_BODY_BYTES, timeout_secs: Int = READ_TIMEOUT_SECS) -> List[UInt8]:
     """Read a full HTTP/1.1 request. Loops recv() until the CRLFCRLF header
     terminator is seen, then keeps reading until Content-Length body bytes have
     arrived — so request bodies larger than one recv buffer (e.g. a large JSON
@@ -280,7 +291,7 @@ def read_request(fd: c_int, max_body_bytes: Int = DEFAULT_MAX_BODY_BYTES) -> Lis
     duplicate external_call symbol declarations are a hard compile error.
     """
     var out = List[UInt8]()
-    _ = socket_recv_timeout(fd, READ_TIMEOUT_SECS)   # slowloris guard
+    _ = socket_recv_timeout(fd, timeout_secs)   # slowloris guard / keep-alive idle budget
     var buf = List[UInt8](capacity=READ_BUFFER_SIZE)
     for _ in range(READ_BUFFER_SIZE):
         buf.append(0)
@@ -312,6 +323,56 @@ def read_request(fd: c_int, max_body_bytes: Int = DEFAULT_MAX_BODY_BYTES) -> Lis
             if len(out) >= header_end + content_length:
                 break  # full body received
     return out^
+
+
+def read_request_from(
+    fd: c_int,
+    mut pending: List[UInt8],
+    max_body_bytes: Int = DEFAULT_MAX_BODY_BYTES,
+    timeout_secs: Int = READ_TIMEOUT_SECS,
+) -> List[UInt8]:
+    """Read exactly one HTTP/1.1 request from a kept-alive connection.
+
+    Like `read_request`, but consumes only the first complete request from
+    the socket and leaves any bytes after it (a pipelined next request) in
+    `pending`, which the caller passes back in on the next call. Returns an
+    empty list when the connection is done (EOF, timeout, or a request over
+    the header/body caps — in which case the caller should close).
+    """
+    _ = socket_recv_timeout(fd, timeout_secs)
+    var buf = List[UInt8](capacity=READ_BUFFER_SIZE)
+    for _ in range(READ_BUFFER_SIZE):
+        buf.append(0)
+    while True:
+        var header_end = _find_header_end(pending)
+        if header_end >= 0:
+            var content_length = _content_length(pending, header_end)
+            if content_length > max_body_bytes:
+                pending = List[UInt8]()
+                return List[UInt8]()
+            var total = header_end + (content_length if content_length > 0 else 0)
+            if len(pending) >= total:
+                var one = List[UInt8](capacity=total)
+                for i in range(total):
+                    one.append(pending[i])
+                var rest = List[UInt8](capacity=len(pending) - total)
+                for i in range(total, len(pending)):
+                    rest.append(pending[i])
+                pending = rest^
+                return one^
+        elif len(pending) > MAX_HEADER_BYTES:
+            pending = List[UInt8]()
+            return List[UInt8]()
+        var n = external_call[
+            "recv", c_ssize_t,
+            c_int, Pointer[UInt8, origin_of(buf)], c_size_t, c_int,
+        ](fd, buf.unsafe_ptr(), c_size_t(READ_BUFFER_SIZE), c_int(0))
+        var got = Int(n)
+        if got <= 0:
+            pending = List[UInt8]()
+            return List[UInt8]()
+        for i in range(got):
+            pending.append(buf[i])
 
 
 def write_all(fd: c_int, mut data: List[UInt8]) -> None:

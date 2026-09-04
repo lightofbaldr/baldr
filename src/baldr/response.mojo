@@ -91,7 +91,6 @@ struct Response(Copyable, Movable):
         r.body = _string_to_bytes(body^)
         r.headers.append(Header(String("Content-Type"), String("text/event-stream; charset=utf-8")))
         r.headers.append(Header(String("Cache-Control"), String("no-cache")))
-        r.headers.append(Header(String("Connection"), String("keep-alive")))
         return r^
 
     @staticmethod
@@ -132,13 +131,25 @@ struct Response(Copyable, Movable):
         self.headers.append(Header(String("Set-Cookie"), sc.to_header()))
 
     def to_bytes(self) -> List[UInt8]:
-        """Render the full HTTP/1.1 response to a byte buffer."""
+        """Render the full HTTP/1.1 response to a byte buffer, closing the
+        connection. See `to_bytes(keep_alive=)` for the persistent form."""
+        return self.to_bytes(False)
+
+    def to_bytes(self, keep_alive: Bool) -> List[UInt8]:
+        """Render the full HTTP/1.1 response to a byte buffer.
+
+        The accept loop decides connection persistence (`wants_keep_alive`)
+        and passes it here; exactly one `Connection:` header is emitted and a
+        user-set `Connection` header is dropped so the wire never contradicts
+        what the loop will do."""
         var head = String("HTTP/1.1 ") + _status_text(self.status) + "\r\n"
         head += "Content-Length: " + String(len(self.body)) + "\r\n"
         head += "Server: baldr/0.1\r\n"
-        head += "Connection: close\r\n"
+        head += "Connection: keep-alive\r\n" if keep_alive else "Connection: close\r\n"
         for i in range(len(self.headers)):
             ref h = self.headers[i]
+            if h.key.lower() == "connection":
+                continue
             # Strip CR/LF/NUL from every header key+value: this is the single
             # choke point through which redirect(), with_header/add_header, and
             # Set-Cookie all render, so sanitizing here blocks HTTP response

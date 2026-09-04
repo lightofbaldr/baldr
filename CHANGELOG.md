@@ -5,6 +5,21 @@ Newest entries first.
 
 ## One `run`: the App carries its parts (2026-09-04)
 
+- **Keep-alive and streaming in the accept loop.** Every `run` now serves a
+  connection as a loop: HTTP/1.1 keeps it open by default (HTTP/1.0 opts in
+  with `Connection: keep-alive`), pipelined requests are served in order,
+  the response carries the `Connection:` header the loop decided on, and an
+  idle kept-alive client is bounded by `KEEPALIVE_IDLE_SECS` (2 s). New
+  `StreamHandler` trait — `__call__(mut self, req, mut out: ResponseStream)`
+  — for chunked / Server-Sent-Event responses through `app.run` and
+  `workers=N`; mounts and middleware `before` still apply, `after` hooks do
+  not. `App.serve_connection(fd, handler)` exposes the per-connection loop
+  (tests drive it over `socket_pair()`); `examples/sse` streams ticks to an
+  `EventSource`. `Response.to_bytes(keep_alive)`; `read_request_from`
+  keeps a per-connection buffer; `socket_shutdown_write` for tests. New
+  suite `tests/test_app_keepalive.mojo` (20 checks). Roadmap items 2 and 3
+  close.
+
 - **`workers=N` on `run`.** Prefork moved into the App: the parent runs
   `on_startup`, binds, forks `N` workers that share the socket, and each
   worker runs the full pipeline it inherited (mounts, middleware, routes,

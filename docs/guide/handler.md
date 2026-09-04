@@ -110,6 +110,7 @@ handler, never about a runner:
 |---|---|---|
 | `DispatchHandler` — `__call__(mut self, req)` | calls it directly; the route table is ignored | route by hand |
 | `RouteHandler` — `__call__(mut self, req, params, name)` | resolves `app.get/post/...` first | `params`, the matched `name`, automatic 404 / 405 + `Allow` |
+| `StreamHandler` — `__call__(mut self, req, mut out: ResponseStream)` | hands you the socket as a chunked stream | SSE / incremental responses — see [Streaming](streaming.md) |
 
 Static mounts (`app.static(...)`) and asset mounts (`app.assets(...)`) work with
 both — they are pure data, resolved before middleware and before the handler.

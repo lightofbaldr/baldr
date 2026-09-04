@@ -6,7 +6,7 @@ proprietary technology of Light of Baldr LLC.
 
 Public API as of Phase 5:
 
-  from baldr.app        import App, DispatchHandler, RouteHandler
+  from baldr.app        import App, DispatchHandler, RouteHandler, StreamHandler
   from baldr.request    import Request
   from baldr.response   import Response, Header
   from baldr.streaming  import ResponseStream

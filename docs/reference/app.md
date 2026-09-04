@@ -74,6 +74,20 @@ trait RouteHandler(Movable, ImplicitlyDeletable):
     than binding each route to its own callback — but the resolved name is now
     threaded in for you.) See [`run`](#run) for the idiom.
 
+### `StreamHandler`
+
+```mojo
+trait StreamHandler(Movable, Deinitable):
+    def __call__(mut self, req: Request, mut out: ResponseStream) raises: ...
+```
+
+A handler that writes its response incrementally through a
+[`ResponseStream`](../guide/streaming.md) bound to the client socket —
+chunked transfer, Server-Sent Events. Mounts and middleware `before` still
+answer with buffered responses; `after` hooks do not run for a streamed
+response. Raising before `out.start()` renders the error handler's `500`;
+raising after closes the connection; returning without `finish()` finishes it.
+
 ---
 
 ## `StaticMount`
@@ -281,6 +295,7 @@ asset mount is registered or the path isn't a manifest URL.
 ```mojo
 def run[H: RouteHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1) raises
 def run[H: DispatchHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1) raises
+def run[H: StreamHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1) raises
 ```
 
 Binds a socket on `host:port` and serves forever. There is one runner; the
@@ -291,7 +306,13 @@ overload is picked by your handler's trait:
   `404`, and on a match the handler receives `(req, params, name)`. With no routes
   registered it is called with empty `Params()` and an empty `name`;
 - a **`DispatchHandler`** routes by hand: it is called as `handler(req)` and the
-  route table is ignored.
+  route table is ignored;
+- a **`StreamHandler`** writes its own response through a `ResponseStream`
+  (see [Streaming](../guide/streaming.md)).
+
+Connections are kept alive per `wants_keep_alive` (HTTP/1.1 default, HTTP/1.0
+opt-in) and pipelined requests are served in order; see
+[Keep-alive in the accept loop](../guide/streaming.md#keep-alive-in-the-accept-loop).
 
 Per request, in order: static mounts → asset mount → `middleware.before` (a
 non-`MW_PASS` response ends the request there; the handler and every `after`
@@ -337,12 +358,24 @@ var resp = app.handle(h, get("/blocked"))
 # resp.status == 403, app.middleware.stages[1].befores == 0
 ```
 
-!!! warning "The accept loop is single-threaded and blocking"
-    `run` is one `accept → read → dispatch → write → close` loop on a single
-    thread per worker. There is no keep-alive and no concurrency inside one
-    worker — a slow handler blocks that worker's next request. Parallelism
-    comes from `workers=N`: a prefork pool where every worker runs this same
-    pipeline.
+## `serve_connection`
+
+```mojo
+def serve_connection[H: RouteHandler](mut self, fd: c_int, mut handler: H) raises
+def serve_connection[H: DispatchHandler](mut self, fd: c_int, mut handler: H) raises
+def serve_connection[H: StreamHandler](mut self, fd: c_int, mut handler: H) raises
+```
+
+Serve every request on an already-connected socket — the keep-alive loop
+`run` uses per accepted connection — and return when the client is done.
+Does not close `fd`. Tests drive it on one end of `baldr.http.socket_pair()`
+after writing the raw requests and `socket_shutdown_write`-ing the other end.
+
+!!! warning "One connection at a time per worker"
+    `run` serves connections serially on a single thread per worker — a slow
+    handler, or a client idling on a kept-alive connection (bounded by
+    `KEEPALIVE_IDLE_SECS`, 2 s), holds that worker. Parallelism comes from
+    `workers=N`: a prefork pool where every worker runs this same pipeline.
 
 ## Deprecated runners
 

@@ -62,7 +62,8 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
    forks inside `run`; every worker inherits the App and runs the full pipeline (mounts, middleware,
    routes, error handler); `on_startup` runs once in the parent. `run_concurrent` is a deprecated
    wrapper. Per-worker divergence of `mut self` state is documented, with `baldr.db` / `baldr.queue`
-   as the shared stores. *Still open:* worker supervision / graceful shutdown, keep-alive.
+   as the shared stores. Keep-alive shipped the same day (`serve_connection`). *Still open:* worker
+   supervision / graceful shutdown.
 
 6. **No package manager, no scaffold.** baldr can't be pip/pixi-installed; you clone + depend via a
    brittle relative `-I ../mojo-bundle/src`. Ship a `baldr new myapp` scaffold (wires `pixi.toml` +
@@ -169,11 +170,11 @@ wants anyway). Concretely, three real pieces:
 1. **`baldr.db` — a `libsqlite3` C-FFI.** `open` / `exec` / `query` → rows. Small, high-value; also
    closes the "baldr has no database story" gap. (De-risk unknown #1: can this nightly dlopen +
    call `libsqlite3` cleanly?)
-2. **Chunked / keep-alive streaming in the HTTP layer.** Today responses are `Content-Length` + close
+2. ~~**Chunked / keep-alive streaming in the HTTP layer.**~~ ✅ **SHIPPED 2026-09-04** (`baldr.streaming.ResponseStream`, keep-alive + pipelining in every `run`). Was: today responses are `Content-Length` + close
    (`serve.mojo:377`); add `Transfer-Encoding: chunked`, flush-per-chunk, and a `Response.stream(...)`
    / SSE surface (upgrades the finite `Response.sse`). (De-risk unknown #2: hold the socket open and
    chunk-write on this nightly.)
-3. **Prefork + routing + an SSE handler.** Fix `run_concurrent` so it drives the full App pipeline
+3. ~~**Prefork + routing + an SSE handler.**~~ ✅ **SHIPPED 2026-09-04** (`run(workers=N)` + `StreamHandler`, `examples/sse`). Was: fix `run_concurrent` so it drives the full App pipeline
    (P0 #5 — today prefork bypasses routes/middleware), and add a streaming handler that long-polls the
    DB (`SELECT … WHERE id > :seen`) and emits `event: batch_done`. htmx's SSE ext (`hx-ext="sse"`,
    `sse-connect`, `hx-trigger="sse:batch_done"`) consumes it.

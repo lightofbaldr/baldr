@@ -146,7 +146,7 @@ baldr is pre-alpha, and `workers=N` is the smallest thing that correctly paralle
 
 !!! warning "What prefork does not give you yet"
     - **No graceful shutdown / worker supervision.** The parent `wait()`s for children; if a worker dies, it is **not** re-spawned, and there's no drain-then-exit on a signal. Ctrl-C kills the whole group. A supervisor loop is roadmap.
-    - **Still one connection at a time per worker.** Each worker's accept loop is serial and there's no keep-alive — `workers=N` gives you N in-flight requests, not N per worker.
+    - **Still one connection at a time per worker.** Each worker's loop is serial: a kept-alive connection holds its worker until the client is done or idles past `KEEPALIVE_IDLE_SECS` (2 s) — `workers=N` gives you N in-flight connections, not N per worker.
     - **Config is positional.** `workers` is a plain keyword arg; there's no `ServeConfig`-style object wiring host/port/workers together, and no env-var override. (`ServeConfig` exists in `baldr.serve`, but it's the static-file CLI's config — not `run_concurrent`'s.)
 
 None of these are hard blocks for the target use case — a stateless or queue-backed API that needs to not block on slow work. They're exactly the rough edges we're tracking, and they'll fill in as the pipeline and `App` converge on the prefork runner.

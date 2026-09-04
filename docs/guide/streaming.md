@@ -63,5 +63,63 @@ transport:
 Header names and connection tokens are compared case-insensitively. The request
 parser retains the request-line version in `request.version`.
 
-The transport primitives are ready here; integration with baldr's accept loop
-lands with the separate `App` rework.
+## In an App: `StreamHandler`
+
+Conform a struct to `StreamHandler` and hand it to `app.run(...)` like any
+other handler. Per request the App gives you the parsed `Request` and a
+`ResponseStream` already bound to the client socket:
+
+```mojo
+from baldr.app import App, StreamHandler
+from baldr.request import Request
+from baldr.streaming import ResponseStream
+
+@fieldwise_init
+struct Ticks(StreamHandler, Copyable, Movable):
+    var served: Int
+
+    def __call__(mut self, req: Request, mut out: ResponseStream) raises:
+        if req.path == "/events":
+            self.served += 1
+            out.start(content_type="text/event-stream")
+            for i in range(5):
+                out.send_event("tick " + String(i + 1), event="tick", id=String(i + 1))
+            out.finish()
+            return
+        out.start(status=404)
+        out.write("404 not found\n")
+        out.finish()
+
+def main() raises:
+    var app = App()
+    app.run(Ticks(0), port=8100)
+```
+
+What the App does around your handler:
+
+- static and asset mounts still answer first, as ordinary buffered responses;
+- the middleware `before` chain runs and may short-circuit with a buffered
+  response (a `429` from `RateLimitMW`, say); `after` hooks do **not** run
+  for a streamed response — its headers are already on the wire;
+- if you return without `finish()`, the App finishes the stream for you;
+- if your handler raises before `start()`, the App renders the error handler's
+  `500` as a normal response; if it raises after, the connection is closed;
+- `app.serve_connection(fd, handler)` is the same loop on one socket, which is
+  how `tests/test_app_keepalive.mojo` tests a stream handler through a socket
+  pair; `workers=N` preforks stream handlers like any other.
+
+`examples/sse/main.mojo` is the runnable version: `pixi run example-sse &&
+build/example-sse`, then `curl -N http://127.0.0.1:8100/events`.
+
+## Keep-alive in the accept loop
+
+Every `run` keeps a connection open across requests when `wants_keep_alive`
+says so: HTTP/1.1 by default, HTTP/1.0 only with `Connection: keep-alive`.
+The response carries the `Connection:` header the loop decided on (a
+`Connection` header set on the `Response` is dropped so the wire never
+contradicts the loop). The first request on a connection gets the 15 s read
+budget; each following request gets `KEEPALIVE_IDLE_SECS` (2 s) before the
+worker moves on, so an idle browser connection cannot park a worker for
+long. Pipelined requests are handled: bytes after the first complete request
+are kept and served next. A streamed response keeps the connection open too,
+provided the handler finished its stream cleanly.
