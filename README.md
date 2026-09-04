@@ -9,6 +9,21 @@ import surface, one binary out.
 
 ## Quick start
 
+From a baldr checkout, generate and run a complete starter app:
+
+```bash
+pixi install
+pixi run new -- myapp
+cd myapp
+pixi install
+pixi run build
+pixi run run
+```
+
+Use `pixi run dev` in the generated project for a polling rebuild-and-restart loop. The scaffold pins Mojo/MAX, wires this checkout's absolute `src/` include path, and includes a handler, template, static CSS, and smoke test. See [`docs/get-started.md`](docs/get-started.md) for `--routes`, `--dir`, and relocation details.
+
+The generated default app uses the current API shape:
+
 ```mojo
 from baldr.app      import App, DispatchHandler
 from baldr.request  import Request
@@ -34,7 +49,7 @@ def main() raises:
     app.run(HelloApp(String("hello, baldr")), port=8080)
 ```
 
-`pixi run example-hello && build/example-hello` → single static binary,
+`pixi run example-hello && build/example-hello` uses the same shape: a single static binary,
 real HTTP/1.1, HTML templates with auto-escape, persistent state in
 the dispatcher struct, JSON in and out. No Python on the request path.
 
@@ -72,7 +87,7 @@ Each is a single-file Mojo binary; total source under 250 lines.
 
 ```bash
 pixi install                  # one-time
-pixi run test                 # 177 / 177 assertions across 6 suites
+pixi run test                 # complete repository suite
 pixi run examples             # all three binaries
 ```
 

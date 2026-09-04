@@ -64,10 +64,12 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
    wrapper. Per-worker divergence of `mut self` state is documented, with `baldr.db` / `baldr.queue`
    as the shared stores. *Still open:* worker supervision / graceful shutdown, keep-alive.
 
-6. **No package manager, no scaffold.** baldr can't be pip/pixi-installed; you clone + depend via a
-   brittle relative `-I ../mojo-bundle/src`. Ship a `baldr new myapp` scaffold (wires `pixi.toml` +
-   include path) and a `pixi run dev` live-reload loop *now* (doesn't need Mojo's package story);
-   publish as a conda/Mojo package when that story stabilizes. `get-started.md` build task.
+6. ~~**No package manager, no scaffold.**~~ ✅ **SCAFFOLD SHIPPED 2026-09-04.** `pixi run new --
+   myapp` creates a pinned, buildable project with the checkout's absolute `src/` include path,
+   handler, templates, static files, smoke tests, and a polling `pixi run dev` rebuild/restart loop.
+   `--routes` emits the named-route idiom. Publishing baldr as a conda/Mojo package remains blocked
+   on that ecosystem's package story; generated READMEs explain how to update the include path when
+   moving a checkout.
 
 ---
 
