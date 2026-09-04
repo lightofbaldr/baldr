@@ -66,6 +66,7 @@ nav:
       - Testing: guide/testing.md
       - Concurrency: guide/concurrency.md
       - Config & Error Handling: guide/config-errors.md
+      - SQLite Database: guide/db.md
       - The GPU Queue: guide/queue.md
   - Deploy: deploy.md
   - Reference:
