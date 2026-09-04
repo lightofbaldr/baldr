@@ -7,6 +7,7 @@ Static constructors cover the common shapes; `.with_header()` chains.
 
 from std.pathlib import Path
 from .json import JsonValue, dumps as json_dumps
+from .cookies import SetCookie
 
 
 struct Header(Copyable, Movable):
@@ -62,11 +63,36 @@ struct Response(Copyable, Movable):
 
     @staticmethod
     def redirect(location: String, status: Int = 302) -> Response:
+        var loc = _safe_redirect_location(location)
         var r = Response()
         r.status = status
-        r.headers.append(Header(String("Location"), location))
+        r.headers.append(Header(String("Location"), loc))
         r.headers.append(Header(String("Content-Type"), String("text/plain; charset=utf-8")))
-        r.body = _string_to_bytes(String("Redirecting to ") + location + "\n")
+        r.body = _string_to_bytes(String("Redirecting to ") + loc + "\n")
+        return r^
+
+    @staticmethod
+    def sse(events: List[String]) -> Response:
+        """Build a Server-Sent Events response (`text/event-stream`).
+
+        Each string in `events` is rendered as one SSE event (`data: ...\\n\\n`).
+        baldr uses `Connection: close`, so the full event stream is sent at once
+        rather than kept open; this is fine for finite event feeds and keeps the
+        transport unchanged. For long-lived streaming, the transport layer
+        (http.mojo) would need keep-alive + chunked writes (planned)."""
+        var body = String()
+        for i in range(len(events)):
+            var ev = events[i]
+            var lines = ev.split(String("\n"))
+            for var ln in lines:
+                body += "data: " + String(ln) + "\n"
+            body += "\n"
+        var r = Response()
+        r.status = 200
+        r.body = _string_to_bytes(body^)
+        r.headers.append(Header(String("Content-Type"), String("text/event-stream; charset=utf-8")))
+        r.headers.append(Header(String("Cache-Control"), String("no-cache")))
+        r.headers.append(Header(String("Connection"), String("keep-alive")))
         return r^
 
     @staticmethod
@@ -91,6 +117,21 @@ struct Response(Copyable, Movable):
         hs.append(Header(key, value))
         return Response(self.status, self.body.copy(), hs^)
 
+    def add_header(mut self, key: String, value: String):
+        """Append a header to this Response in place. For middleware `after`
+        hooks that mutate the response (avoids an owned-Response copy that
+        Mojo 1.0 can't express through a variadic trait dispatch)."""
+        self.headers.append(Header(key, value))
+
+    def with_cookie(self, var sc: SetCookie) -> Response:
+        """Returns a new Response with a `Set-Cookie` header appended.
+        Multiple Set-Cookie headers are allowed (order-preserving)."""
+        return self.with_header(String("Set-Cookie"), sc.to_header())
+
+    def add_cookie(mut self, var sc: SetCookie):
+        """Append a `Set-Cookie` header in place (mutating variant)."""
+        self.headers.append(Header(String("Set-Cookie"), sc.to_header()))
+
     def to_bytes(self) -> List[UInt8]:
         """Render the full HTTP/1.1 response to a byte buffer."""
         var head = String("HTTP/1.1 ") + _status_text(self.status) + "\r\n"
@@ -99,7 +140,11 @@ struct Response(Copyable, Movable):
         head += "Connection: close\r\n"
         for i in range(len(self.headers)):
             ref h = self.headers[i]
-            head += h.key + ": " + h.value + "\r\n"
+            # Strip CR/LF/NUL from every header key+value: this is the single
+            # choke point through which redirect(), with_header/add_header, and
+            # Set-Cookie all render, so sanitizing here blocks HTTP response
+            # splitting / header injection regardless of how the value was set.
+            head += _strip_header_controls(h.key) + ": " + _strip_header_controls(h.value) + "\r\n"
         head += "\r\n"
 
         var head_bytes = head.as_bytes()
@@ -117,6 +162,54 @@ def _string_to_bytes(s: String) -> List[UInt8]:
     for i in range(len(b)):
         out.append(b[i])
     return out^
+
+
+def _strip_header_controls(s: String) -> String:
+    """Remove CR (0x0D), LF (0x0A) and NUL (0x00) from a header field.
+
+    Request-derived data placed into a header value (e.g.
+    `Response.redirect(req.query)`, a user-set cookie, or a `with_header`
+    value) could otherwise contain `\\r\\n` and inject arbitrary extra
+    response headers or a second response body — HTTP response splitting
+    (cache poisoning, Set-Cookie injection, XSS). These three bytes are
+    pure-ASCII control characters and never appear inside a multi-byte
+    UTF-8 sequence, so filtering at the byte level is UTF-8 safe.
+    """
+    var b = s.as_bytes()
+    var needs = False
+    for i in range(len(b)):
+        var c = b[i]
+        if c == 0x0D or c == 0x0A or c == 0x00:
+            needs = True
+            break
+    if not needs:
+        return s
+    var out = String()
+    for cp in s.codepoint_slices():
+        var cb = cp.as_bytes()
+        if len(cb) == 1 and (cb[0] == 0x0D or cb[0] == 0x0A or cb[0] == 0x00):
+            continue
+        out += String(cp)
+    return out^
+
+
+def _safe_redirect_location(loc: String) -> String:
+    """Neutralize dangerous redirect targets. Allows same-origin relative paths
+    and explicit http(s):// URLs; collapses everything else to "/" — blocking
+    javascript:/data:/vbscript:/file: scheme XSS and protocol-relative //host
+    open redirects. (CR/LF/NUL are additionally stripped at the render choke.)"""
+    var lower = loc.lower()
+    if lower.startswith("//"):
+        return String("/")                 # protocol-relative -> external host
+    if loc.startswith("/"):
+        return loc                         # same-origin relative path
+    if lower.startswith("http://") or lower.startswith("https://"):
+        return loc                         # explicit http(s)
+    var colon = loc.find(String(":"))
+    var slash = loc.find(String("/"))
+    if colon >= 0 and (slash < 0 or colon < slash):
+        return String("/")                 # an unapproved URI scheme -> unsafe
+    return loc                             # schemeless relative (e.g. "page.html")
 
 
 def _status_text(code: Int) -> String:

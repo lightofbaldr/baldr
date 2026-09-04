@@ -68,10 +68,10 @@ struct JsonValue(Copyable, Movable, Deinitable):
     var object_keys: List[String]
     var object_values: List[JsonValue]
 
-    # Mojo 1.0: `List[T]` is `Deinitable` only when `T` is, and this struct holds
-    # a `List` of itself. The compiler cannot close that cycle when synthesising
-    # the destructor, so declare it explicitly; the fields are still destroyed
-    # implicitly when the body returns (probe-verified on Mojo 1.0.0).
+    # Explicit deletability anchor: makes JsonValue unconditionally
+    # Deinitable, breaking the List[JsonValue] <-> Self conformance
+    # cycle introduced by the 2026-07 linear-types overhaul. Fields (incl. the
+    # recursive Lists) are auto-destroyed here.
     def __deinit__(deinit self):
         pass
 
@@ -350,15 +350,23 @@ def _parse_number(mut p: _Parser) raises -> Float64:
         raise Error("json: bad number '" + num_str + "'")
 
 
-def _parse_value(mut p: _Parser) raises -> JsonValue:
+# Max nesting depth for JSON containers — bounds native recursion so a deeply
+# nested document raises a catchable Error instead of overflowing the C stack
+# (an uncatchable SIGSEGV that takes the whole server down).
+comptime MAX_PARSE_DEPTH: Int = 128
+
+
+def _parse_value(mut p: _Parser, depth: Int) raises -> JsonValue:
+    if depth > MAX_PARSE_DEPTH:
+        raise Error("json: max nesting depth exceeded (" + String(MAX_PARSE_DEPTH) + ")")
     _skip_ws(p)
     if p.pos >= len(p.src):
         raise Error("json: unexpected end of input")
     var c = p.src[p.pos]
     if c == UInt8(123):           # '{'
-        return _parse_object(p)
+        return _parse_object(p, depth)
     elif c == UInt8(91):          # '['
-        return _parse_array(p)
+        return _parse_array(p, depth)
     elif c == UInt8(34):          # '"'
         return JsonValue.from_string(_parse_string(p))
     elif c == UInt8(116):         # 't' rue
@@ -375,7 +383,7 @@ def _parse_value(mut p: _Parser) raises -> JsonValue:
     raise Error("json: unexpected byte " + String(Int(c)) + " at offset " + String(p.pos))
 
 
-def _parse_array(mut p: _Parser) raises -> JsonValue:
+def _parse_array(mut p: _Parser, depth: Int) raises -> JsonValue:
     _expect(p, UInt8(91))  # '['
     var xs = List[JsonValue]()
     _skip_ws(p)
@@ -383,7 +391,7 @@ def _parse_array(mut p: _Parser) raises -> JsonValue:
         p.pos += 1
         return JsonValue.from_array(xs^)
     while True:
-        xs.append(_parse_value(p))
+        xs.append(_parse_value(p, depth + 1))
         _skip_ws(p)
         if p.pos >= len(p.src):
             raise Error("json: unterminated array")
@@ -396,7 +404,7 @@ def _parse_array(mut p: _Parser) raises -> JsonValue:
         raise Error("json: expected ',' or ']' in array")
 
 
-def _parse_object(mut p: _Parser) raises -> JsonValue:
+def _parse_object(mut p: _Parser, depth: Int) raises -> JsonValue:
     _expect(p, UInt8(123))  # '{'
     var obj = JsonValue.from_object()
     _skip_ws(p)
@@ -408,7 +416,7 @@ def _parse_object(mut p: _Parser) raises -> JsonValue:
         var key = _parse_string(p)
         _skip_ws(p)
         _expect(p, UInt8(58))  # ':'
-        var value = _parse_value(p)
+        var value = _parse_value(p, depth + 1)
         obj.set(key, value^)
         _skip_ws(p)
         if p.pos >= len(p.src):
@@ -425,7 +433,7 @@ def _parse_object(mut p: _Parser) raises -> JsonValue:
 def parse(s: String) raises -> JsonValue:
     """Parse a JSON document into a JsonValue tree."""
     var p = _Parser(s)
-    var v = _parse_value(p)
+    var v = _parse_value(p, 0)
     _skip_ws(p)
     if p.pos != len(p.src):
         raise Error("json: trailing data after document at offset " + String(p.pos))

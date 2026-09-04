@@ -1,0 +1,103 @@
+/* baldr docs — "Kinetic Forge" skin over Material for MkDocs (slate).
+ * Dark glassmorphism, violet accent, the Mojo orange->pink->violet brand gradient. */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap");
+
+:root {
+  --kf-orange: #FF7A1A;
+  --kf-pink:   #FF3B7C;
+  --kf-violet: #A656FF;
+  --kf-accent: #CFBCFF;
+  --kf-grad: linear-gradient(135deg, var(--kf-orange) 0%, var(--kf-pink) 55%, var(--kf-violet) 100%);
+}
+
+/* ---- palette: reskin Material slate to Kinetic Forge ---- */
+[data-md-color-scheme="slate"] {
+  --md-hue: 270;
+  --md-default-bg-color:        #0F0D13;
+  --md-default-fg-color:        #E6E0E9;
+  --md-default-fg-color--light: #CBC4D2;
+  --md-default-fg-color--lighter:#948E9C;
+  --md-default-fg-color--lightest:#36343A;
+
+  --md-primary-fg-color:  #141218;
+  --md-primary-bg-color:  #E6E0E9;
+
+  --md-accent-fg-color:   var(--kf-accent);
+  --md-typeset-a-color:   var(--kf-accent);
+
+  --md-code-bg-color:     #1A171E;
+  --md-code-fg-color:     #CBC4D2;
+
+  --md-footer-bg-color:   #0B0910;
+  --md-footer-bg-color--dark: #08060B;
+}
+
+html, body { font-feature-settings: "cv11", "ss01"; }
+.md-typeset { letter-spacing: -0.003em; }
+
+/* ---- header: translucent glass ---- */
+.md-header {
+  background: rgba(20,18,24,0.82);
+  backdrop-filter: saturate(140%) blur(12px);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  box-shadow: none;
+}
+.md-tabs { background: transparent; border-bottom: 1px solid rgba(255,255,255,0.06); }
+
+/* ---- headings ---- */
+.md-typeset h1 { font-weight: 700; letter-spacing: -0.015em; color: var(--md-default-fg-color); }
+.md-typeset h2 { font-weight: 600; letter-spacing: -0.01em; }
+
+/* ---- gradient brand text helper ---- */
+.kf-grad {
+  background: var(--kf-grad);
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+}
+
+/* ---- code blocks: darker glass + gradient rail ---- */
+.md-typeset pre > code {
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+}
+.md-typeset .highlight { position: relative; }
+.md-typeset .highlight::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 3px; background: var(--kf-grad); opacity: .8;
+}
+
+/* ---- links / accents ---- */
+.md-typeset a { text-decoration-color: rgba(207,188,255,0.35); }
+.md-nav__link--active, .md-nav__item--active > .md-nav__link { color: var(--kf-accent) !important; }
+
+/* ========== Home page components ========== */
+.kf-hero { text-align: center; padding: 3.5rem 1rem 1rem; position: relative; }
+.kf-hero::after {
+  content:""; position:absolute; inset:-20% 0 auto 0; height: 340px; z-index:-1;
+  background: radial-gradient(60% 60% at 50% 0%, rgba(166,86,255,0.16), transparent 70%);
+  pointer-events:none;
+}
+.kf-flame { width: 56px; height: 56px; margin-bottom: .5rem; }
+.kf-hero .kf-title { font-size: clamp(2.4rem, 6vw, 3.4rem); font-weight: 700; line-height: 1.05; margin: .2rem 0; }
+.kf-hero .kf-sub { font-size: 1.15rem; color: var(--md-default-fg-color--light); max-width: 40rem; margin: .6rem auto 0; }
+.kf-cta { display:flex; gap:.75rem; justify-content:center; flex-wrap:wrap; margin: 1.6rem 0 .4rem; }
+.kf-btn {
+  display:inline-block; padding:.6rem 1.2rem; border-radius: 999px; font-weight:500;
+  text-decoration:none !important; transition: transform .12s ease, box-shadow .12s ease;
+}
+.kf-btn-primary { background: var(--kf-grad); color:#17151b !important; }
+.kf-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 28px rgba(255,59,124,0.28); }
+.kf-btn-ghost { border:1px solid rgba(255,255,255,0.14); color: var(--md-default-fg-color) !important; background: rgba(255,255,255,0.03); }
+.kf-btn-ghost:hover { background: rgba(255,255,255,0.07); }
+.kf-meta { color: var(--md-default-fg-color--lighter); font-family:"JetBrains Mono",monospace; font-size:.8rem; margin-top:.8rem; }
+
+.kf-stats { display:flex; flex-wrap:wrap; gap:1rem; justify-content:center; margin: 2rem 0; }
+.kf-stat { background:#1A171E; border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:1rem 1.4rem; min-width:120px; text-align:center; }
+.kf-stat .n { font-size:1.6rem; font-weight:700; }
+.kf-stat .l { font-family:"JetBrains Mono",monospace; font-size:.68rem; letter-spacing:.08em; color:var(--md-default-fg-color--lighter); text-transform:uppercase; }
+
+.kf-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1rem; margin:2rem 0; }
+.kf-card { background:#1A171E; border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:1.2rem 1.3rem; }
+.kf-card h3 { margin:.2rem 0 .4rem; font-size:1.05rem; }
+.kf-card p { margin:0; color:var(--md-default-fg-color--light); font-size:.92rem; }
+.kf-card .g { font-size:1.4rem; }

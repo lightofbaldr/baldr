@@ -7,6 +7,8 @@ richer, user-facing type that includes headers, body, and query string.
 
 from std.collections import Dict
 from .json import JsonValue, parse as json_parse
+from .cookies import parse_cookies
+from .validation import Validator, validate_json, ValidationResult
 
 
 struct Request(Copyable, Movable):
@@ -16,6 +18,7 @@ struct Request(Copyable, Movable):
     var query: String
     var body: String
     var headers: Dict[String, String]
+    var peer: String                  # kernel-reported client IP (getpeername); "" if unknown
 
     def __init__(out self):
         self.method = String("GET")
@@ -23,6 +26,7 @@ struct Request(Copyable, Movable):
         self.query = String()
         self.body = String()
         self.headers = Dict[String, String]()
+        self.peer = String()
 
     def __init__(
         out self,
@@ -37,6 +41,7 @@ struct Request(Copyable, Movable):
         self.query = query
         self.body = body
         self.headers = headers^
+        self.peer = String()
 
     def header(self, name: String) -> String:
         """Case-insensitive lookup. Returns empty string if absent."""
@@ -54,6 +59,30 @@ struct Request(Copyable, Movable):
     def json(self) raises -> JsonValue:
         """Parse the request body as JSON. Raises on malformed."""
         return json_parse(self.body)
+
+    def cookies(self) -> Dict[String, String]:
+        """Parse the `Cookie` request header into a name->value dict.
+        Empty dict if no Cookie header."""
+        return parse_cookies(self.header(String("Cookie")))
+
+    def cookie(self, name: String, default: String = String()) -> String:
+        """Look up a single request cookie by name."""
+        var c = self.cookies()
+        for entry in c.items():
+            if entry.key == name:
+                return entry.value
+        return default
+
+    def validate[*Vs: Validator](self, *validators: *Vs) raises -> ValidationResult:
+        """Parse the body as JSON and run a comptime chain of validators.
+
+        Usage:
+            var result = req.validate(Required("name"), StringLength("name", 1, 100))
+            if not result.ok:
+                return result.to_response()
+        """
+        var value = json_parse(self.body)
+        return validate_json(value, *validators)
 
 
 def _lowercase(s: String) -> String:
@@ -122,8 +151,11 @@ def _hex_digit(c: UInt8) -> Int:
     return -1
 
 
+comptime MAX_HEADERS: Int = 100   # cap header count (parse-side DoS guard)
+
+
 # ── Parsing raw HTTP bytes into a Request ─────────────────────────────────
-def parse_request(req_bytes: List[UInt8]) raises -> Request:
+def parse_request(req_bytes: List[UInt8], peer: String = String()) raises -> Request:
     """Parse a raw HTTP/1.1 request into a Request.
 
     Returns a Request with sensible defaults on partial input; handlers
@@ -131,6 +163,7 @@ def parse_request(req_bytes: List[UInt8]) raises -> Request:
     accumulates the full head before dispatch.
     """
     var r = Request()
+    r.peer = peer
     var n = len(req_bytes)
     if n == 0:
         return r^
@@ -170,6 +203,8 @@ def parse_request(req_bytes: List[UInt8]) raises -> Request:
 
     # Headers up to blank CRLF.
     var content_length: Int = 0
+    var cl_seen: Int = 0
+    var header_count: Int = 0
     while i < n:
         # End of headers when we see CRLF or LF immediately.
         if i < n and req_bytes[i] == UInt8(13):
@@ -201,12 +236,30 @@ def parse_request(req_bytes: List[UInt8]) raises -> Request:
             while v_start < len(vb) and (vb[v_start] == UInt8(32) or vb[v_start] == UInt8(9)):
                 v_start += 1
             var v = String(line[byte=v_start:])
-            r.headers[k] = v
-            if _lowercase(k) == "content-length":
+            var kl = _lowercase(k)
+            # Reject ambiguous framing that enables request smuggling behind a proxy:
+            # any Transfer-Encoding (unsupported -> chunked desync), duplicate
+            # Content-Length (first-vs-last disagreement), or a non-numeric/negative
+            # (overflow-wrapped) Content-Length.
+            if kl == "transfer-encoding":
+                raise Error("400 Bad Request: Transfer-Encoding unsupported")
+            if kl == "content-length":
+                cl_seen += 1
+                if cl_seen > 1:
+                    raise Error("400 Bad Request: duplicate Content-Length")
+                var cl: Int
                 try:
-                    content_length = atol(v)
+                    cl = atol(v)
                 except:
-                    content_length = 0
+                    raise Error("400 Bad Request: invalid Content-Length")
+                if cl < 0:
+                    raise Error("400 Bad Request: invalid Content-Length")
+                content_length = cl
+            r.headers[k] = v
+
+        header_count += 1
+        if header_count > MAX_HEADERS:
+            raise Error("400 Bad Request: too many headers")
 
     # Body — exactly Content-Length bytes if declared, else remainder.
     var body_end = i + content_length if content_length > 0 else n

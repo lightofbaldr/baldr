@@ -152,6 +152,29 @@ def test_response_with_header(mut r: Runner) raises:
     r.check(String("custom header"), s.find(String("X-Custom: yes")) > 0)
 
 
+def test_response_header_injection(mut r: Runner) raises:
+    # CRLF embedded in a header value must NOT become a separate header line
+    # (HTTP response splitting). The value is folded onto one line instead.
+    var resp = Response.text(String("hi"), 200).with_header(
+        String("X-Set"), String("ok\r\nInjected: pwned"))
+    var s = _bytes_to_str(resp.to_bytes())
+    r.check(String("CRLF header value is not a new header line"),
+            s.find(String("\r\nInjected: pwned")) < 0)
+    r.check(String("header value folded onto one line"),
+            s.find(String("X-Set: okInjected: pwned")) > 0)
+    # redirect(location) is a classic user-controlled sink. Only the header
+    # block can be split — CRLF that survives in the body text is harmless
+    # body content, so we assert against the header block specifically.
+    var rd = Response.redirect(String("/next\r\nSet-Cookie: admin=1"), 302)
+    var rs = _bytes_to_str(rd.to_bytes())
+    var sep = rs.find(String("\r\n\r\n"))
+    var head = rs
+    if sep > 0:
+        head = String(rs[byte=0:sep])
+    r.check(String("redirect Location not split into a Set-Cookie header"),
+            head.find(String("\r\nSet-Cookie")) < 0)
+
+
 # ── Tests: App static mount ───────────────────────────────────────────────
 def test_app_static_mount(mut r: Runner, tmpdir: String) raises:
     var p = Path(tmpdir + "/hello.txt")
@@ -185,6 +208,21 @@ def test_app_static_unmatched(mut r: Runner) raises:
     except:
         raised = True
     r.check(String("unmatched static raises"), raised)
+
+
+def test_app_static_prefix_boundary(mut r: Runner) raises:
+    # '/static-secret' must NOT match the '/static' mount (prefix-boundary bypass).
+    var app = App()
+    app.static(String("/static"), String("/tmp"))
+    var req = Request()
+    req.method = String("GET")
+    req.path = String("/static-secret/x")
+    var raised = False
+    try:
+        _ = app.dispatch_static(req)
+    except:
+        raised = True
+    r.check(String("/static-secret does not match /static mount"), raised)
 
 
 # ── Tests: Templates ──────────────────────────────────────────────────────
@@ -235,9 +273,11 @@ def main() raises:
     test_response_json(r)
     test_response_redirect(r)
     test_response_with_header(r)
+    test_response_header_injection(r)
 
     test_app_static_mount(r, tmpdir)
     test_app_static_unmatched(r)
+    test_app_static_prefix_boundary(r)
 
     test_templates_basic(r, tmpdir)
     test_templates_missing(r, tmpdir)

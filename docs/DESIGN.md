@@ -80,7 +80,7 @@ struct HelloApp(DispatchHandler, Copyable, Movable):
         ...
 
 def main() raises:
-    app.run(HelloApp(String("hi")), port=8080)
+    app.run(HelloApp("hi"), port=8080)
 ```
 
 The trait pattern actually turned out **better** than function-pointer
@@ -116,11 +116,10 @@ struct KVRecord:       var offset: Int ; var length: Int    (gpu.mojo)
 struct TaskRecord:     var offset, length, status: Int      (gpu.mojo)
 ```
 
-This is deliberate: the `baldr.queue.Queue` facade picks the backend
-at construction time and dispatches through one method surface without
-divergent record shapes. Since 2026-09-04 baldr ships one in-process
-backend (CPU/SIMD); the GPU backend moved to `mojo-gpuq` and the facade
-is kept as the seam where an out-of-process client can reappear. The trait isn't drawn yet — Phase 3 only shipped the
+This is deliberate: a future `baldr.Queue` facade can pick the
+backend at construction time (`Queue.local()` → GPU if available, CPU
+otherwise) and dispatch through a shared trait without divergent
+record shapes. The trait isn't drawn yet — Phase 3 only shipped the
 CPU side — but the symmetry means the facade is mostly plumbing when
 it's time.
 
@@ -168,8 +167,7 @@ bytes. `len()` is `len(q_records) - q_head_idx`, which keeps pop O(1).
 
 ## Mojo 1.0 quirks worth knowing
 
-These bit us during the build and are documented in
-[`feedback_mojo_v1_syntax`](../../.claude/projects/-home-adam/memory/feedback_mojo_v1_syntax.md):
+These bit us during the build — worth knowing if you're on the same nightly:
 
 - `fn` keyword **removed** — use `def` for both function declarations
   and function-type aliases.

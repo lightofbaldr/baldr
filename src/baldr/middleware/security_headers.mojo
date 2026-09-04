@@ -27,7 +27,7 @@ comptime DEFAULT_CSP: String = String(
 
 
 def apply_security_headers(
-    var resp: Response,
+    resp: Response,
     csp: String = DEFAULT_CSP,
 ) -> Response:
     """Append the five standard hardening headers to `resp`."""

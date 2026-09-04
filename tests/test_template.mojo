@@ -57,6 +57,13 @@ def test_autoescape(mut r: Runner) raises:
               String("&lt;b&gt;&#39;x&#39;&amp;y&lt;/b&gt;"))
     expect_eq(r, "safe disables", render_str("{{ html|safe }}", ctx),
               String("<b>'x'&y</b>"))
+    # |escape is already escaped — the renderer must NOT auto-escape it again
+    # (regression for a double-escape bug: `<` becoming `&amp;lt;`). The output
+    # must equal the plain auto-escaped form, not a doubly-escaped one.
+    expect_eq(r, "explicit escape single-escapes", render_str("{{ html|escape }}", ctx),
+              String("&lt;b&gt;&#39;x&#39;&amp;y&lt;/b&gt;"))
+    expect_eq(r, "e alias single-escapes", render_str("{{ html|e }}", ctx),
+              String("&lt;b&gt;&#39;x&#39;&amp;y&lt;/b&gt;"))
 
 
 def test_autoescape_utf8(mut r: Runner) raises:

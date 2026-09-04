@@ -30,6 +30,10 @@ comptime SO_REUSEADDR: c_int = 2
 comptime DEFAULT_PORT: Int = 8090
 comptime LISTEN_BACKLOG: c_int = 16
 comptime READ_BUFFER_SIZE: Int = 4096
+comptime SO_RCVTIMEO: c_int = 20                       # Linux SO_RCVTIMEO
+comptime READ_TIMEOUT_SECS: Int = 15                   # per-recv stall budget (slowloris guard)
+comptime MAX_HEADER_BYTES: Int = 64 * 1024             # cap on accumulated header bytes
+comptime DEFAULT_MAX_BODY_BYTES: Int = 10 * 1024 * 1024  # default body cap (matches ServerConfig)
 
 
 # ── Socket primitives via FFI ────────────────────────────────────────────
@@ -48,6 +52,26 @@ def socket_reuseaddr(fd: c_int) -> Bool:
         c_int, c_int, c_int,
         Pointer[c_int, origin_of(one)], c_int,
     ](fd, SOL_SOCKET, SO_REUSEADDR, Pointer(to=one), c_int(4))
+    return Int(rc) == 0
+
+
+def socket_recv_timeout(fd: c_int, secs: Int) -> Bool:
+    """Set SO_RCVTIMEO on a client fd so a stalled sender cannot hold the
+    connection — and, on the one-connection-at-a-time accept loop, the whole
+    server — open indefinitely (slowloris). `struct timeval { long tv_sec;
+    long tv_usec }` is 16 bytes on LP64; secs (< 2^32) fits in the low 4 bytes."""
+    var tv = List[UInt8](capacity=16)
+    for _ in range(16):
+        tv.append(0)
+    tv[0] = UInt8(secs & 0xFF)
+    tv[1] = UInt8((secs >> 8) & 0xFF)
+    tv[2] = UInt8((secs >> 16) & 0xFF)
+    tv[3] = UInt8((secs >> 24) & 0xFF)
+    var rc = external_call[
+        "setsockopt", c_int,
+        c_int, c_int, c_int,
+        Pointer[UInt8, origin_of(tv)], c_int,
+    ](fd, SOL_SOCKET, SO_RCVTIMEO, tv.unsafe_ptr(), c_int(16))
     return Int(rc) == 0
 
 
@@ -101,6 +125,25 @@ def socket_close(fd: c_int) -> None:
     _ = external_call["close", c_int, c_int](fd)
 
 
+def socket_peer_ip(fd: c_int) -> String:
+    """The connected peer's IPv4 address ("a.b.c.d") via getpeername(2), or ""
+    on error. This is the KERNEL-reported address — never a client-supplied header
+    (X-Forwarded-For is spoofable and must not be used for rate-limit identity)."""
+    var addr = List[UInt8](capacity=16)
+    var alen = List[UInt8](capacity=4)
+    for _ in range(16):
+        addr.append(0)
+    alen.append(16); alen.append(0); alen.append(0); alen.append(0)
+    var rc = external_call[
+        "getpeername", c_int,
+        c_int, Pointer[UInt8, origin_of(addr)], Pointer[UInt8, origin_of(alen)],
+    ](fd, addr.unsafe_ptr(), alen.unsafe_ptr())
+    if Int(rc) != 0:
+        return String("")
+    return String(Int(addr[4])) + "." + String(Int(addr[5])) + "." \
+         + String(Int(addr[6])) + "." + String(Int(addr[7]))
+
+
 def _find_header_end(buf: List[UInt8]) -> Int:
     """Return the index just past the CRLFCRLF header terminator, or -1 if the
     headers aren't fully received yet."""
@@ -146,7 +189,7 @@ def _content_length(buf: List[UInt8], header_end: Int) -> Int:
     return -1
 
 
-def read_request(fd: c_int) -> List[UInt8]:
+def read_request(fd: c_int, max_body_bytes: Int = DEFAULT_MAX_BODY_BYTES) -> List[UInt8]:
     """Read a full HTTP/1.1 request. Loops recv() until the CRLFCRLF header
     terminator is seen, then keeps reading until Content-Length body bytes have
     arrived — so request bodies larger than one recv buffer (e.g. a large JSON
@@ -157,6 +200,7 @@ def read_request(fd: c_int) -> List[UInt8]:
     duplicate external_call symbol declarations are a hard compile error.
     """
     var out = List[UInt8]()
+    _ = socket_recv_timeout(fd, READ_TIMEOUT_SECS)   # slowloris guard
     var buf = List[UInt8](capacity=READ_BUFFER_SIZE)
     for _ in range(READ_BUFFER_SIZE):
         buf.append(0)
@@ -175,9 +219,13 @@ def read_request(fd: c_int) -> List[UInt8]:
         # Re-scan the full accumulator for the header terminator (it may land
         # across a recv boundary). Parse Content-Length once headers complete.
         if header_end < 0:
+            if len(out) > MAX_HEADER_BYTES:
+                return List[UInt8]()           # headers exceed cap -> drop + close
             header_end = _find_header_end(out)
             if header_end >= 0:
                 content_length = _content_length(out, header_end)
+                if content_length > max_body_bytes:
+                    return List[UInt8]()       # declared body too large -> drop + close
         if header_end >= 0:
             if content_length <= 0:
                 break  # no body expected (GET, or no Content-Length)

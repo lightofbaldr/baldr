@@ -17,12 +17,31 @@ test-queue-cpu = "mkdir -p build && mojo build tests/test_queue_cpu.mojo -I src 
 test-middleware = "mkdir -p build && mojo build tests/test_middleware.mojo -I src -o build/test_middleware && build/test_middleware"
 test-env       = "mkdir -p build && mojo build tests/test_env.mojo       -I src -o build/test_env       && build/test_env"
 test-queue-api = "mkdir -p build && mojo build tests/test_queue_api.mojo -I src -o build/test_queue_api && build/test_queue_api"
-test = { depends-on = ["test-imports", "test-template", "test-json", "test-api", "test-queue-cpu", "test-middleware", "test-env", "test-queue-api"] }
+test-router   = "mkdir -p build && mojo build tests/test_router.mojo   -I src -o build/test_router   && build/test_router"
+test-mw-chain = "mkdir -p build && mojo build tests/test_middleware_chain.mojo -I src -o build/test_mw_chain && build/test_mw_chain"
+test-cookies = "mkdir -p build && mojo build tests/test_cookies.mojo -I src -o build/test_cookies && build/test_cookies"
+test-validation = "mkdir -p build && mojo build tests/test_validation.mojo -I src -o build/test_validation && build/test_validation"
+test-template-v2 = "mkdir -p build && mojo build tests/test_template_v2.mojo -I src -o build/test_template_v2 && build/test_template_v2"
+test-template-include = "mkdir -p build && mojo build tests/test_template_include.mojo -I src -o build/test_template_include && build/test_template_include"
+test-assets = "mkdir -p build && mojo build tests/test_assets.mojo -I src -o build/test_assets && build/test_assets"
+test-config-errors = "mkdir -p build && mojo build tests/test_config_errors.mojo -I src -o build/test_config_errors && build/test_config_errors"
+test-testing-lifecycle = "mkdir -p build && mojo build tests/test_testing_lifecycle.mojo -I src -o build/test_testing_lifecycle && build/test_testing_lifecycle"
+test-concurrency = "mkdir -p build && mojo build tests/test_concurrency.mojo -I src -o build/test_concurrency && build/test_concurrency"
+test-safe-join = "mkdir -p build && mojo build tests/test_safe_join.mojo -I src -o build/test_safe_join && build/test_safe_join"
+test-http-limits = "mkdir -p build && mojo build tests/test_http_limits.mojo -I src -o build/test_http_limits && build/test_http_limits"
+test-request-framing = "mkdir -p build && mojo build tests/test_request_framing.mojo -I src -o build/test_request_framing && build/test_request_framing"
+test-peer-ip = "mkdir -p build && mojo build tests/test_peer_ip.mojo -I src -o build/test_peer_ip && build/test_peer_ip"
+test-template-guard = "mkdir -p build && mojo build tests/test_template_guard.mojo -I src -o build/test_template_guard && build/test_template_guard"
+test-redirect-guard = "mkdir -p build && mojo build tests/test_redirect_guard.mojo -I src -o build/test_redirect_guard && build/test_redirect_guard"
+test = { depends-on = ["test-imports", "test-template", "test-json", "test-api", "test-queue-cpu", "test-middleware", "test-env", "test-queue-api", "test-router", "test-mw-chain", "test-cookies", "test-validation", "test-template-v2", "test-template-include", "test-assets", "test-config-errors", "test-testing-lifecycle", "test-concurrency", "test-safe-join", "test-http-limits", "test-request-framing", "test-peer-ip", "test-template-guard", "test-redirect-guard"] }
 
 example-hello = "mkdir -p build && mojo build examples/hello/main.mojo -I src -o build/example-hello"
 example-chat  = "mkdir -p build && mojo build examples/chat/main.mojo  -I src -o build/example-chat"
 example-scan  = "mkdir -p build && mojo build examples/scan/main.mojo  -I src -o build/example-scan"
-examples = { depends-on = ["example-hello", "example-chat", "example-scan"] }
+example-route = "mkdir -p build && mojo build examples/route/main.mojo -I src -o build/example-route"
+example-middleware = "mkdir -p build && mojo build examples/middleware/main.mojo -I src -o build/example-middleware"
+example-concurrency = "mkdir -p build && mojo build examples/concurrency/main.mojo -I src -o build/example-concurrency"
+examples = { depends-on = ["example-hello", "example-chat", "example-scan", "example-route", "example-middleware", "example-concurrency"] }
 
 bench-cpu = "mkdir -p build && mojo build bench/bench_cpu.mojo -I src -o build/bench-cpu && build/bench-cpu"
 

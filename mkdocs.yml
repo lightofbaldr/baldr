@@ -1,0 +1,77 @@
+site_name: baldr
+site_description: The batteries-included, pure-Mojo web framework. One import, one binary, no Python on the request path.
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  palette:
+    scheme: slate
+  font:
+    text: Geist
+    code: JetBrains Mono
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+extra_css:
+  - stylesheets/kinetic-forge.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.snippets
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Get Started: get-started.md
+  - Mojo in 5 Minutes: mojo-primer.md
+  - Tutorial:
+      - First Steps: tutorial/first-steps.md
+      - Routing & Path Params: tutorial/routing.md
+      - Templates & Responses: tutorial/templates.md
+      - JSON In & Out: tutorial/json.md
+      - Static Files & Assets: tutorial/static.md
+      - Middleware: tutorial/middleware.md
+      - "Capstone: a Notes App": tutorial/notes-app.md
+  - Guide:
+      - The Handler Trait: guide/handler.md
+      - Testing: guide/testing.md
+      - Concurrency: guide/concurrency.md
+      - Config & Error Handling: guide/config-errors.md
+      - The GPU Queue: guide/queue.md
+  - Deploy: deploy.md
+  - Reference:
+      - App: reference/app.md
+      - Request & Response: reference/request-response.md
+      - Router & Params: reference/router.md
+      - Templates: reference/templates.md
+      - JSON: reference/json.md
+  - Why Mojo: why-mojo.md

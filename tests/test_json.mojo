@@ -155,6 +155,37 @@ def test_errors(mut r: Runner):
     expect_true(r, "garbage literal raises", caught)
 
 
+def test_depth_limit(mut r: Runner):
+    # Deeply-nested input must raise a catchable Error, not overflow the C
+    # stack (an uncatchable SIGSEGV). 5000 >> MAX_PARSE_DEPTH (128).
+    var deep = String("")
+    for _ in range(5000):
+        deep += "["
+    for _ in range(5000):
+        deep += "]"
+    var caught: Bool = False
+    try:
+        _ = parse(deep)
+    except:
+        caught = True
+    expect_true(r, "deeply-nested JSON raises (no stack overflow)", caught)
+
+    # A document within the limit still parses fine.
+    var ok = String("")
+    for _ in range(100):
+        ok += "["
+    ok += "1"
+    for _ in range(100):
+        ok += "]"
+    var ok_parsed: Bool
+    try:
+        _ = parse(ok)
+        ok_parsed = True
+    except:
+        ok_parsed = False
+    expect_true(r, "100-deep JSON still parses", ok_parsed)
+
+
 def main() raises:
     var r = Runner()
     test_primitives(r)
@@ -168,6 +199,7 @@ def main() raises:
     test_round_trip(r)
     test_pretty(r)
     test_errors(r)
+    test_depth_limit(r)
 
     print("---")
     print(String(r.total - r.failures), "/", String(r.total), "passed")

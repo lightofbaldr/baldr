@@ -79,10 +79,7 @@ struct Value(Copyable, Movable, Deinitable):
     var keys: List[String]
     var vals: List[Value]
 
-    # Mojo 1.0: `List[T]` is `Deinitable` only when `T` is, and this struct holds
-    # a `List` of itself. The compiler cannot close that cycle when synthesising
-    # the destructor, so declare it explicitly; the fields are still destroyed
-    # implicitly when the body returns (probe-verified on Mojo 1.0.0).
+    # Deletability anchor for the recursive List[Value] fields (see JsonValue).
     def __deinit__(deinit self):
         pass
 
@@ -467,7 +464,78 @@ def _apply_filter(value: Value, name: String, args: List[Value]) raises -> Value
         if not value.truthy():
             return args[0].copy()
         return value.copy()
+    if name == "capitalize":
+        return Value.string(_capitalize(value.to_str()))
+    if name == "trim":
+        return Value.string(_trim(value.to_str()))
+    if name == "abs":
+        if value.tag == V_INT:
+            var iv = value.i
+            return Value.int_(iv if iv >= 0 else -iv)
+        if value.tag == V_FLOAT or value.tag == V_INT:
+            var fv = value.f
+            return Value.float_(fv if fv >= 0.0 else -fv)
+        return value.copy()
+    if name == "join":
+        if value.tag != V_LIST:
+            return value.copy()
+        var sep = String("")
+        if len(args) == 1:
+            sep = args[0].to_str()
+        var out = String()
+        for i in range(len(value.items)):
+            if i > 0:
+                out += sep
+            out += value.items[i].to_str()
+        return Value.string(out^)
+    if name == "truncate":
+        # truncate(n) keeps the first n chars; appends '...' if truncated.
+        if value.tag != V_STRING or len(args) != 1 or args[0].tag != V_INT:
+            return value.copy()
+        var limit = args[0].i
+        var s = value.s
+        if s.byte_length() <= limit:
+            return value.copy()
+        var out = String()
+        var count = 0
+        for cp in s.codepoint_slices():
+            if count >= limit:
+                break
+            out += String(cp)
+            count += 1
+        out += "..."
+        return Value.string(out^)
     raise Error("template: unknown filter '" + name + "'")
+
+
+def _capitalize(s: String) -> String:
+    """Uppercase the first codepoint, lowercase the rest."""
+    if s.byte_length() == 0:
+        return String()
+    var out = String()
+    var first = True
+    for cp in s.codepoint_slices():
+        if first:
+            out += String(cp).upper()
+            first = False
+        else:
+            out += String(cp).lower()
+    return out^
+
+
+def _trim(s: String) -> String:
+    """Strip leading/trailing ASCII whitespace."""
+    var b = s.as_bytes()
+    var n = len(b)
+    var start: Int = 0
+    while start < n and _is_ws(b[start]):
+        start += 1
+    var end: Int = n - 1
+    while end >= start and _is_ws(b[end]):
+        end -= 1
+    if start > end:
+        return String()
+    return String(s[byte=start:end + 1])
 
 
 def _filter_escape(value: Value) -> Value:
@@ -673,13 +741,22 @@ def evaluate_with_safe(expr: String, ctx: Value) raises -> EvalResult:
 
 
 def _has_safe_filter(expr: String) -> Bool:
-    """Lightweight check for whether the expression's filter chain
-    contains a `|safe` at the top level. Misses pathological cases
-    (e.g. nested in a string literal) — good enough for v0.1."""
-    # Walk the expression, find unescaped '|' and check the next ident.
+    """True when the expression's FINAL top-level filter already produces
+    HTML-safe output, so the renderer must NOT auto-escape it again:
+      - `|safe`            — caller vouches the raw value is safe (opt-out)
+      - `|escape` / `|e`   — value is already escaped; auto-escaping it again
+                             would double-escape (`<` -> `&amp;lt;`)
+    Conservative: any other trailing filter (upper, default, ...) leaves the
+    value unsafe, so the renderer auto-escapes it. Tracks the LAST filter
+    rather than any occurrence, so `{{ x|safe|upper }}` is auto-escaped.
+    Misses pathological cases (e.g. a '|' nested in a string literal) —
+    good enough for v0.1."""
+    # Walk the expression, find each unescaped top-level '|' and remember
+    # the name of the last filter it introduces.
     var bs = expr.as_bytes()
     var i = 0
     var in_str = UInt8(0)
+    var last_is_safe = False
     while i < len(bs):
         var c = bs[i]
         if in_str != UInt8(0):
@@ -691,18 +768,15 @@ def _has_safe_filter(expr: String) -> Bool:
             var j = i + 1
             while j < len(bs) and _is_ws(bs[j]):
                 j += 1
-            # Read filter name.
             var ks = j
             while j < len(bs) and _is_alnum(bs[j]):
                 j += 1
-            if j - ks == 4:
-                if bs[ks] == UInt8(115) and bs[ks+1] == UInt8(97) \
-                   and bs[ks+2] == UInt8(102) and bs[ks+3] == UInt8(101):
-                    return True
+            var fname = String(unsafe_from_utf8=bs[ks:j])
+            last_is_safe = fname == "safe" or fname == "escape" or fname == "e"
             i = j
             continue
         i += 1
-    return False
+    return last_is_safe
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -721,6 +795,7 @@ comptime N_TEXT: Int = 0
 comptime N_EXPR: Int = 1
 comptime N_IF:   Int = 2
 comptime N_FOR:  Int = 3
+comptime N_INCLUDE: Int = 4
 
 
 struct Node(Copyable, Movable, Deinitable):
@@ -738,10 +813,10 @@ struct Node(Copyable, Movable, Deinitable):
     var for_expr: String
     var for_body: List[Node]
 
-    # Mojo 1.0: `List[T]` is `Deinitable` only when `T` is, and this struct holds
-    # a `List` of itself. The compiler cannot close that cycle when synthesising
-    # the destructor, so declare it explicitly; the fields are still destroyed
-    # implicitly when the body returns (probe-verified on Mojo 1.0.0).
+    # INCLUDE: partial name resolved via a TemplateLoader at render.
+    var include_name: String
+
+    # Deletability anchor for the recursive List[List[Node]]/List[Node] fields.
     def __deinit__(deinit self):
         pass
 
@@ -755,6 +830,7 @@ struct Node(Copyable, Movable, Deinitable):
         self.for_var = String()
         self.for_expr = String()
         self.for_body = List[Node]()
+        self.include_name = String()
 
     @staticmethod
     def text_node(s: String) -> Node:
@@ -810,6 +886,8 @@ def _parse_block(mut p: Parser, end_markers: List[String]) raises -> List[Node]:
             nodes.append(_parse_if(p))
         elif _stmt_starts(body, "for"):
             nodes.append(_parse_for(p))
+        elif _stmt_starts(body, "include"):
+            nodes.append(_parse_include(p))
         else:
             raise Error("template: unknown statement '" + body + "'")
     return nodes^
@@ -878,8 +956,44 @@ def _parse_for(mut p: Parser) raises -> Node:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+def _parse_include(mut p: Parser) raises -> Node:
+    """Parse `{% include "name" %}` — records the partial name; resolution
+    happens at render time via a TemplateLoader."""
+    var head = p.tokens[p.pos].body   # 'include "name"'
+    var arg = String(String(head[byte=7:]).strip())  # drop 'include'
+    p.pos += 1
+    # Length guard FIRST (short-circuits): an empty `{% include %}` must not
+    # slice arg[byte=-1:], which would crash before the quote check ran.
+    if arg.byte_length() < 2 \
+       or String(arg[byte=0:1]) != "\"" \
+       or String(arg[byte=arg.byte_length() - 1:]) != "\"":
+        raise Error("template: include expects a quoted name, got: " + arg)
+    var name = String(arg[byte=1:arg.byte_length() - 1])
+    var n = Node()
+    n.kind = N_INCLUDE
+    n.include_name = name
+    return n^
+
+
 # Template handle + render.
 # ──────────────────────────────────────────────────────────────────────────
+
+# A loader resolves a partial name to its source string at render time,
+# enabling `{% include "name" %}`. The filesystem `Templates` wrapper conforms.
+trait TemplateLoader(Movable, Deinitable):
+    def load(self, name: String) raises -> String: ...
+
+
+@fieldwise_init
+struct NoLoader(TemplateLoader, Copyable, Movable):
+    """Default loader: has no partials. Used by the standalone `render(t, ctx)`
+    so it stays backward-compatible (templates without includes are unaffected)."""
+    var _unused: Int
+    def __init__(out self):
+        self._unused = 0
+    def load(self, name: String) raises -> String:
+        raise Error("template: {% include %} requires a loader (name='" + name + "')")
+
 
 struct Template(Copyable, Movable):
     var nodes: List[Node]
@@ -890,12 +1004,37 @@ struct Template(Copyable, Movable):
 
 
 def render(t: Template, ctx: Value) raises -> String:
+    """Render without a loader. `{% include %}` will raise (use
+    `render_with_loader` / the `Templates` wrapper for includes)."""
     var out = String()
-    _render_nodes(t.nodes, ctx, out)
+    _render_nodes(t.nodes, ctx, out, NoLoader())
     return out^
 
 
-def _render_nodes(nodes: List[Node], ctx: Value, mut out: String) raises:
+def render_with_loader[L: TemplateLoader](t: Template, ctx: Value, loader: L) raises -> String:
+    """Render with a loader so `{% include "name" %}` resolves partials."""
+    var out = String()
+    _render_nodes(t.nodes, ctx, out, loader)
+    return out^
+
+
+def _set_loop_var(mut ctx: Value, index0: Int, total: Int):
+    """Populate a Jinja-style `loop` dict on the render context."""
+    var loop = Value.dict()
+    loop.set(String("index"), Value.int_(index0 + 1))
+    loop.set(String("index0"), Value.int_(index0))
+    loop.set(String("first"), Value.bool_(index0 == 0))
+    loop.set(String("last"), Value.bool_(index0 == total - 1))
+    loop.set(String("length"), Value.int_(total))
+    loop.set(String("revindex"), Value.int_(total - index0))
+    loop.set(String("revindex0"), Value.int_(total - index0 - 1))
+    ctx.set(String("loop"), loop^)
+
+
+comptime MAX_INCLUDE_DEPTH: Int = 32
+
+
+def _render_nodes[L: TemplateLoader](nodes: List[Node], ctx: Value, mut out: String, loader: L, depth: Int = 0) raises:
     for i in range(len(nodes)):
         ref n = nodes[i]
         if n.kind == N_TEXT:
@@ -913,22 +1052,37 @@ def _render_nodes(nodes: List[Node], ctx: Value, mut out: String) raises:
             for b in range(len(n.if_conds)):
                 var cond = evaluate(n.if_conds[b], ctx)
                 if cond.truthy():
-                    _render_nodes(n.if_bodies[b], ctx, out)
+                    _render_nodes(n.if_bodies[b], ctx, out, loader, depth)
                     taken = True
                     break
             if not taken and n.if_has_else:
-                _render_nodes(n.if_else, ctx, out)
+                _render_nodes(n.if_else, ctx, out, loader, depth)
         elif n.kind == N_FOR:
             var iter_val = evaluate(n.for_expr, ctx)
             if iter_val.tag == V_LIST:
-                for it in range(len(iter_val.items)):
+                var total = len(iter_val.items)
+                for it in range(total):
                     var loop_ctx = ctx.copy()
                     loop_ctx.set(n.for_var, iter_val.items[it].copy())
-                    _render_nodes(n.for_body, loop_ctx, out)
+                    _set_loop_var(loop_ctx, it, total)
+                    _render_nodes(n.for_body, loop_ctx, out, loader, depth)
             elif iter_val.tag == V_DICT:
-                for it in range(len(iter_val.keys)):
+                var total = len(iter_val.keys)
+                for it in range(total):
                     var loop_ctx = ctx.copy()
                     loop_ctx.set(n.for_var, Value.string(iter_val.keys[it]))
-                    _render_nodes(n.for_body, loop_ctx, out)
+                    _set_loop_var(loop_ctx, it, total)
+                    _render_nodes(n.for_body, loop_ctx, out, loader, depth)
             # Non-iterable: silently render nothing (Jinja behavior is
             # similar — undefined iters produce empty output).
+        elif n.kind == N_INCLUDE:
+            # Cap include recursion so a self- or cyclic include raises a clear
+            # error instead of overflowing the stack.
+            if depth >= MAX_INCLUDE_DEPTH:
+                raise Error(
+                    String("template: include depth exceeded (")
+                    + String(MAX_INCLUDE_DEPTH) + ") — cyclic include of '"
+                    + n.include_name + "'?")
+            var src = loader.load(n.include_name)
+            var partial = Template(src)
+            _render_nodes(partial.nodes, ctx, out, loader, depth + 1)

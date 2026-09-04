@@ -219,6 +219,48 @@ def _hex_digit(c: UInt8) -> Int:
     return -1
 
 
+def _cstr_buf(s: String) -> List[UInt8]:
+    """NUL-terminated byte buffer for passing a String to a C call."""
+    var b = s.as_bytes()
+    var out = List[UInt8](capacity=len(b) + 1)
+    for i in range(len(b)):
+        out.append(b[i])
+    out.append(0)
+    return out^
+
+
+def _c_realpath(path: String) -> String:
+    """Canonicalize `path` via libc realpath(3): resolves '..' AND symlinks to
+    an absolute real path. Returns "" if the path does not exist or cannot be
+    resolved (realpath returned NULL)."""
+    var inbuf = _cstr_buf(path)
+    var buf = List[UInt8](capacity=4096)
+    for _ in range(4096):
+        buf.append(0)
+    var rc = external_call[
+        "realpath", Int,
+        Pointer[UInt8, origin_of(inbuf)], Pointer[UInt8, origin_of(buf)],
+    ](inbuf.unsafe_ptr(), buf.unsafe_ptr())
+    if rc == 0:
+        return String("")
+    var s = String("")
+    for i in range(4096):
+        if buf[i] == 0:
+            break
+        s += chr(Int(buf[i]))
+    return s^
+
+
+def _has_control_byte(s: String) -> Bool:
+    """True if any byte is a C0 control (< 0x20) or DEL (0x7F) — e.g. an embedded
+    NUL from a `%00` url-decode that would desync the libc/Mojo path boundary."""
+    var b = s.as_bytes()
+    for i in range(len(b)):
+        if b[i] < 0x20 or b[i] == 0x7F:
+            return True
+    return False
+
+
 def safe_join(root: String, request_path: String) -> String:
     """Resolve `request_path` against `root`, refusing path-traversal escapes.
 
@@ -242,7 +284,9 @@ def safe_join(root: String, request_path: String) -> String:
 
     # Strip leading '/'.
     if rp.startswith("/"):
-        # Mojo 1.0: no aliasing of the slice source and the construction target.
+        # Same aliasing fix as app.mojo's static-mount strip: materialize the slice
+        # into a temporary so the immutable read of `rp` finishes before `rp` is
+        # reassigned. dev2026080106 rejects the direct self-assignment form.
         var stripped = String(rp[byte=1:])
         rp = stripped^
 
@@ -255,7 +299,10 @@ def safe_join(root: String, request_path: String) -> String:
             if len(safe) > 0:
                 _ = safe.pop()
             continue
-        safe.append(String(p))
+        var seg = String(p)
+        if _has_control_byte(seg):
+            return String("")               # NUL / control byte in a segment -> deny
+        safe.append(seg^)
 
     # Recombine.
     var out = String(root)
@@ -265,7 +312,19 @@ def safe_join(root: String, request_path: String) -> String:
         out += safe[k]
         if k < len(safe) - 1:
             out += "/"
-    return out^
+
+    # Lexical '..' collapsing above does NOT stop an in-root symlink from
+    # pointing outside the served root. Canonicalize both with realpath(3) and
+    # require the resolved target to stay within the resolved root.
+    var root_real = _c_realpath(root)
+    if root_real.byte_length() == 0:
+        return String("")               # unresolvable root -> deny
+    var target_real = _c_realpath(out)
+    if target_real.byte_length() == 0:
+        return out^                     # nonexistent file -> caller 404s via Path.exists()
+    if target_real == root_real or target_real.startswith(root_real + "/"):
+        return out^                     # confirmed within root -> serve
+    return String("")                   # escaped root via symlink -> deny (caller 404s)
 
 
 # ── MIME types ───────────────────────────────────────────────────────────
