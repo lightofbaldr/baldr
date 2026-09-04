@@ -29,6 +29,7 @@ test-assets = "mkdir -p build && mojo build tests/test_assets.mojo -I src -o bui
 test-config-errors = "mkdir -p build && mojo build tests/test_config_errors.mojo -I src -o build/test_config_errors && build/test_config_errors"
 test-app-pipeline  = "mkdir -p build && mojo build tests/test_app_pipeline.mojo -I src -o build/test_app_pipeline && build/test_app_pipeline"
 test-app-keepalive = "mkdir -p build && mojo build tests/test_app_keepalive.mojo -I src -o build/test_app_keepalive && build/test_app_keepalive"
+test-scaffold = "mkdir -p build && mojo build tests/test_scaffold.mojo -I src -I tools -o build/test_scaffold && build/test_scaffold"
 test-testing-lifecycle = "mkdir -p build && mojo build tests/test_testing_lifecycle.mojo -I src -o build/test_testing_lifecycle && build/test_testing_lifecycle"
 test-concurrency = "mkdir -p build && mojo build tests/test_concurrency.mojo -I src -o build/test_concurrency && build/test_concurrency"
 test-safe-join = "mkdir -p build && mojo build tests/test_safe_join.mojo -I src -o build/test_safe_join && build/test_safe_join"
@@ -37,7 +38,9 @@ test-request-framing = "mkdir -p build && mojo build tests/test_request_framing.
 test-peer-ip = "mkdir -p build && mojo build tests/test_peer_ip.mojo -I src -o build/test_peer_ip && build/test_peer_ip"
 test-template-guard = "mkdir -p build && mojo build tests/test_template_guard.mojo -I src -o build/test_template_guard && build/test_template_guard"
 test-redirect-guard = "mkdir -p build && mojo build tests/test_redirect_guard.mojo -I src -o build/test_redirect_guard && build/test_redirect_guard"
-test = { depends-on = ["test-imports", "test-template", "test-json", "test-api", "test-queue-cpu", "test-middleware", "test-env", "test-db", "test-queue-api", "test-router", "test-mw-chain", "test-cookies", "test-validation", "test-template-v2", "test-template-include", "test-assets", "test-config-errors", "test-app-pipeline", "test-app-keepalive", "test-streaming", "test-testing-lifecycle", "test-concurrency", "test-safe-join", "test-http-limits", "test-request-framing", "test-peer-ip", "test-template-guard", "test-redirect-guard"] }
+test = { depends-on = ["test-imports", "test-template", "test-json", "test-api", "test-queue-cpu", "test-middleware", "test-env", "test-db", "test-queue-api", "test-router", "test-mw-chain", "test-cookies", "test-validation", "test-template-v2", "test-template-include", "test-assets", "test-config-errors", "test-app-pipeline", "test-app-keepalive", "test-scaffold", "test-streaming", "test-testing-lifecycle", "test-concurrency", "test-safe-join", "test-http-limits", "test-request-framing", "test-peer-ip", "test-template-guard", "test-redirect-guard"] }
+
+new = "mkdir -p build && mojo build tools/baldr_new.mojo -I src -o build/baldr_new && build/baldr_new"
 
 example-hello = "mkdir -p build && mojo build examples/hello/main.mojo -I src -o build/example-hello"
 example-chat  = "mkdir -p build && mojo build examples/chat/main.mojo  -I src -o build/example-chat"

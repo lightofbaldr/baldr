@@ -5,6 +5,28 @@ baldr is a Mojo library. You need the Mojo toolchain (via [pixi](https://pixi.sh
 !!! tip "New to Mojo? Read [Mojo in 5 Minutes](mojo-primer.md) first."
     Coming from Python, six small language differences explain everything you'll see in the examples. Five-minute read, and the rest of the docs click into place.
 
+## Scaffold a project
+
+From a baldr checkout, generate a complete starter project:
+
+```console
+$ pixi run new -- myapp
+$ cd myapp
+$ pixi install
+$ pixi run build
+$ pixi run run
+```
+
+The scaffold includes a handler, HTML template, static CSS, smoke test, and pinned Mojo/MAX environment. During development, use the polling rebuild loop instead:
+
+```console
+$ pixi run dev
+```
+
+It rebuilds when a file under `src/` or `templates/` changes, stops the previous child process, and starts the new binary. Pass `--routes` to generate a named `RouteHandler` example, or `--dir <parent>` to choose the parent directory.
+
+The generated `pixi.toml` records the absolute path to this checkout's `src/` directory. If you move either checkout, update the `-I` path in the generated `build` and `test` tasks.
+
 ## Prerequisites
 
 - **pixi** — [install it](https://pixi.sh/latest/#installation) (manages the Mojo/MAX toolchain).
@@ -74,7 +96,7 @@ $ curl localhost:8080
 
 You now have a single self-contained binary at `build/app`. Copy it to any matching-arch box and run it — no Mojo, no Python, no dependencies on the target.
 
-!!! tip "Coming: `baldr new`"
-    The `git clone` + hand-written `pixi.toml` above is the honest primitive today. A `baldr new myapp` scaffold + a `pixi run dev` live-reload loop are on the near-term roadmap — they'll wrap exactly this so day one is one command.
+!!! tip "Prefer the scaffold"
+    The hand-written setup above explains the underlying include-path contract. For a new app, `pixi run new -- myapp` creates the same setup plus tests, templates, static files, and the development loop.
 
 Next: **[First Steps →](tutorial/first-steps.md)** builds a real app one layer at a time.
