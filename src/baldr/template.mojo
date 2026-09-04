@@ -69,7 +69,7 @@ comptime V_LIST:   Int = 5
 comptime V_DICT:   Int = 6
 
 
-struct Value(Copyable, Movable):
+struct Value(Copyable, Movable, Deinitable):
     var tag: Int
     var b: Bool
     var i: Int
@@ -78,6 +78,13 @@ struct Value(Copyable, Movable):
     var items: List[Value]
     var keys: List[String]
     var vals: List[Value]
+
+    # Mojo 1.0: `List[T]` is `Deinitable` only when `T` is, and this struct holds
+    # a `List` of itself. The compiler cannot close that cycle when synthesising
+    # the destructor, so declare it explicitly; the fields are still destroyed
+    # implicitly when the body returns (probe-verified on Mojo 1.0.0).
+    def __deinit__(deinit self):
+        pass
 
     def __init__(out self):
         self.tag = V_NONE
@@ -716,7 +723,7 @@ comptime N_IF:   Int = 2
 comptime N_FOR:  Int = 3
 
 
-struct Node(Copyable, Movable):
+struct Node(Copyable, Movable, Deinitable):
     var kind: Int
     var text: String                # for TEXT, the literal body; for EXPR, the expression source
 
@@ -730,6 +737,13 @@ struct Node(Copyable, Movable):
     var for_var: String
     var for_expr: String
     var for_body: List[Node]
+
+    # Mojo 1.0: `List[T]` is `Deinitable` only when `T` is, and this struct holds
+    # a `List` of itself. The compiler cannot close that cycle when synthesising
+    # the destructor, so declare it explicitly; the fields are still destroyed
+    # implicitly when the body returns (probe-verified on Mojo 1.0.0).
+    def __deinit__(deinit self):
+        pass
 
     def __init__(out self):
         self.kind = N_TEXT

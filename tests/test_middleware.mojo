@@ -128,7 +128,10 @@ def test_format_log_line_basic(mut r: Runner) raises:
     req.path = String("/api/echo")
 
     var resp = Response.text(String("hello"))
-    var t0 = perf_counter_ns()
+    # dev2026080106 dropped implicit Int -> UInt. `format_log_line` takes UInt
+    # (a monotonic ns timestamp is never negative), so convert at the boundary
+    # rather than widening the library's signature.
+    var t0 = UInt(perf_counter_ns())
     # Tiny sleep-equivalent: just call a function so elapsed > 0.
     _ = req.method.byte_length()
 
@@ -145,7 +148,7 @@ def test_format_log_line_404(mut r: Runner) raises:
     req.method = String("POST")
     req.path = String("/missing")
     var resp = Response.text(String("not found"), 404)
-    var line = format_log_line(req, resp, perf_counter_ns())
+    var line = format_log_line(req, resp, UInt(perf_counter_ns()))
     r.check(String("404 status"), line.find(String("→ 404")) > 0)
     r.check(String("POST method"), line.find(String("POST")) == 0)
 

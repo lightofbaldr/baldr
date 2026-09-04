@@ -243,7 +243,9 @@ def safe_join(root: String, request_path: String) -> String:
 
     # Strip leading '/'.
     if rp.startswith("/"):
-        rp = String(rp[byte=1:])
+        # Mojo 1.0: no aliasing of the slice source and the construction target.
+        var stripped = String(rp[byte=1:])
+        rp = stripped^
 
     var parts = rp.split("/")
     var safe = List[String]()

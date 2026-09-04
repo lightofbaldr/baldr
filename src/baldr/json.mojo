@@ -59,7 +59,7 @@ comptime JSON_OBJECT: Int = 5
 # struct trivially Copyable / Movable.
 # --------------------------------------------------------------------------
 
-struct JsonValue(Copyable, Movable):
+struct JsonValue(Copyable, Movable, Deinitable):
     var tag: Int
     var bool_val: Bool
     var number_val: Float64
@@ -67,6 +67,13 @@ struct JsonValue(Copyable, Movable):
     var array_val: List[JsonValue]
     var object_keys: List[String]
     var object_values: List[JsonValue]
+
+    # Mojo 1.0: `List[T]` is `Deinitable` only when `T` is, and this struct holds
+    # a `List` of itself. The compiler cannot close that cycle when synthesising
+    # the destructor, so declare it explicitly; the fields are still destroyed
+    # implicitly when the body returns (probe-verified on Mojo 1.0.0).
+    def __deinit__(deinit self):
+        pass
 
     def __init__(out self):
         self.tag = JSON_NULL

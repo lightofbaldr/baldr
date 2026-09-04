@@ -32,7 +32,7 @@ struct HelloApp(DispatchHandler, Movable):
     var greeting: String
 
     def __call__(mut self, req: Request) raises -> Response:
-        var t0 = perf_counter_ns()
+        var t0 = UInt(perf_counter_ns())  # Mojo 1.0: no implicit Int -> UInt; the logger takes UInt ns
         var resp: Response
 
         if req.method == "GET" and req.path == "/":

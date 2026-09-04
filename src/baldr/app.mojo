@@ -83,7 +83,10 @@ struct App(Copyable, Movable):
                     return Response.text(String("405 method not allowed\n"), 405)
                 var sub = String(req.path[byte=m.prefix.byte_length():])
                 if sub.byte_length() > 0 and sub[byte=0:1] == "/":
-                    sub = String(sub[byte=1:])
+                    # Mojo 1.0 rejects aliasing `sub` as both the slice source and the
+                    # construction target; materialise into a temporary, then transfer.
+                    var stripped = String(sub[byte=1:])
+                    sub = stripped^
                 var fs = safe_join(m.dir, sub)
                 return Response.file(fs)
         raise Error(String("baldr: no static mount matches"))

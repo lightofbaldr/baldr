@@ -16,7 +16,7 @@ multiple handler threads must guard their own access.
 
 from std.collections import Dict
 from std.ffi import OwnedDLHandle, c_size_t
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import UnsafePointer
 
 from .cpu import Match
@@ -28,7 +28,7 @@ from .gpu import (
 )
 
 
-struct GpuQueue(Movable, ImplicitlyDestructible):
+struct GpuQueue(Movable, ImplicitlyDeletable):
     """Single-process GPU-backed Queue / KV / Tasks store with the
     same method surface as `CpuQueue`."""
     var capacity: Int
@@ -45,22 +45,39 @@ struct GpuQueue(Movable, ImplicitlyDestructible):
     # CUDA resources. Must outlive every method call; ordered so that
     # the handle is closed last on destruction.
     var cuda: OwnedDLHandle
-    var htod: HtoDFn
-    var dtoh: DtoHFn
-    var ctx: DeviceContext
+    # NOTE (dev2026080106): the CUDA memcpy symbols are NOT stored as fields.
+    # `get_function` now returns a `_DLCallable[return_type, origin_of(handle)]`
+    # that carries an immutable borrow of the OwnedDLHandle, so the library
+    # cannot be dlclose'd between dlsym and the call. Since this struct *owns*
+    # the handle (`self.cuda = cuda^`), a stored callable would borrow from a
+    # moved-from local — exactly the dangling-dlsym shape the upstream fix
+    # prevents. Resolve per call instead; dlsym is a hash lookup and is noise
+    # next to a device memcpy.
+    # FIELD ORDER IS LOAD-BEARING (Mojo 1.0.0, probe-verified 2026-09-04): fields
+    # are destroyed in declaration order. If the DeviceContext dies before the
+    # DeviceBuffer it owns, the next DeviceContext()+allocation in the same
+    # process deadlocks inside the driver (test_queue_api hung here since the
+    # dev2026080106 port). Declare the buffer first so it is freed first; the
+    # explicit __deinit__ below pins that order regardless of the language rule.
     var dev_buf: DeviceBuffer[DType.uint8]
-    var dev_base: UnsafePointer[UInt8, MutAnyOrigin]
+    var ctx: DeviceContext
+    # No cached device base pointer: the 2026-07 nightly forbids a struct field
+    # that exposes AnyOrigin. We derive it on demand from dev_buf via _base().
+
+    def __deinit__(deinit self):
+        """Tear down in dependency order: device buffer, then its context, then
+        the libcuda handle the context's driver calls resolve through."""
+        _ = self.dev_buf^
+        _ = self.ctx^
+        _ = self.cuda^
 
     def __init__(out self, capacity: Int = 1024 * 1024 * 1024) raises:
         """Open libcuda, bind the memcpy entry points, allocate the
         device buffer. Raises if libcuda isn't available or the
         allocation fails — callers handle the fallback to CPU."""
         var cuda = OwnedDLHandle("libcuda.so.1")
-        var htod = cuda.get_function[HtoDFn]("cuMemcpyHtoD_v2")
-        var dtoh = cuda.get_function[DtoHFn]("cuMemcpyDtoH_v2")
         var ctx = DeviceContext()
         var dev_buf = ctx.create_buffer_sync[DType.uint8](capacity)
-        var dev_base = dev_buf.unsafe_ptr().bitcast[UInt8]()
 
         self.capacity = capacity
         self.tail = 0
@@ -71,11 +88,24 @@ struct GpuQueue(Movable, ImplicitlyDestructible):
         self.task_ids = List[Int]()
         self.next_task_id = 1
         self.cuda = cuda^
-        self.htod = htod
-        self.dtoh = dtoh
         self.ctx = ctx^
         self.dev_buf = dev_buf^
-        self.dev_base = dev_base
+
+    # ── Device base pointer ───────────────────────────────────────────────
+    def _base(self) -> UnsafePointer[UInt8, ImmutAnyOrigin]:
+        """Device buffer base pointer, derived on demand. Not cached in a
+        field: the 2026-07 nightly forbids struct fields exposing AnyOrigin.
+
+        Returns an IMMUTABLE pointer (dev2026080106). `as_unsafe_any_origin`
+        preserves source mutability, and `self` is borrowed immutably here, so
+        the old `MutAnyOrigin` return was silently widening imm -> mut — the
+        cast `origin_cast` now rejects outright ("Cannot safely cast an
+        immutable pointer to mutable"). Nothing needs it mutable: both call
+        sites take only `Int(...)` of the address to build a `CUdeviceptr`, and
+        the actual device write is performed by cuMemcpyHtoD_v2, not through
+        this pointer.
+        """
+        return self.dev_buf.unsafe_ptr().bitcast[UInt8]().as_unsafe_any_origin()
 
     # ── Internal allocator ────────────────────────────────────────────────
     def _write_bytes(mut self, src: UnsafePointer[UInt8, MutAnyOrigin], n: Int) raises -> Int:
@@ -89,7 +119,11 @@ struct GpuQueue(Movable, ImplicitlyDestructible):
                 + " > " + String(self.capacity) + ")"
             )
         var dst_offset = self.tail
-        if not cuda_memcpy_h2d(self.htod, self.dev_base + dst_offset, src, n):
+        var htod = self.cuda.get_function[CUresult]("cuMemcpyHtoD_v2")
+        var rc_w = htod(
+            CUdeviceptr(Int(self._base() + dst_offset)), src, c_size_t(n)
+        )
+        if Int(rc_w) != 0:
             raise Error(String("baldr.queue.gpu: cuMemcpyHtoD_v2 failed"))
         self.tail += n
         return dst_offset
@@ -99,14 +133,19 @@ struct GpuQueue(Movable, ImplicitlyDestructible):
         var stage = List[UInt8](capacity=rec.length)
         for _ in range(rec.length):
             stage.append(0)
-        if not cuda_memcpy_d2h(self.dtoh, stage.unsafe_ptr(),
-                               self.dev_base + rec.offset, rec.length):
+        var dtoh = self.cuda.get_function[CUresult]("cuMemcpyDtoH_v2")
+        var rc_r = dtoh(
+            stage.unsafe_ptr().as_unsafe_any_origin(),
+            CUdeviceptr(Int(self._base() + rec.offset)),
+            c_size_t(rec.length),
+        )
+        if Int(rc_r) != 0:
             raise Error(String("baldr.queue.gpu: cuMemcpyDtoH_v2 failed"))
         return stage^
 
     # ── Queue API ─────────────────────────────────────────────────────────
     def push(mut self, var payload: List[UInt8]) raises -> Int:
-        var offset = self._write_bytes(payload.unsafe_ptr(), len(payload))
+        var offset = self._write_bytes(payload.unsafe_ptr().as_unsafe_any_origin(), len(payload))
         self.q_records.append(KVRecord(offset, len(payload)))
         return offset
 
@@ -133,7 +172,7 @@ struct GpuQueue(Movable, ImplicitlyDestructible):
 
     # ── KV API ────────────────────────────────────────────────────────────
     def set(mut self, key: String, var payload: List[UInt8]) raises:
-        var offset = self._write_bytes(payload.unsafe_ptr(), len(payload))
+        var offset = self._write_bytes(payload.unsafe_ptr().as_unsafe_any_origin(), len(payload))
         self.kv[key] = KVRecord(offset, len(payload))
 
     def get(self, key: String) raises -> List[UInt8]:
@@ -150,7 +189,7 @@ struct GpuQueue(Movable, ImplicitlyDestructible):
 
     # ── Tasks API ─────────────────────────────────────────────────────────
     def tpush(mut self, var payload: List[UInt8]) raises -> Int:
-        var offset = self._write_bytes(payload.unsafe_ptr(), len(payload))
+        var offset = self._write_bytes(payload.unsafe_ptr().as_unsafe_any_origin(), len(payload))
         var tid = self.next_task_id
         self.next_task_id += 1
         self.tasks[tid] = TaskRecord(offset, len(payload), TASK_PENDING)

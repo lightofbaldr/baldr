@@ -59,7 +59,7 @@ Wire protocol (text + raw bytes, one command per connection):
 from std.collections import Dict
 from std.ffi import OwnedDLHandle, c_int, c_size_t, external_call
 from std.time import perf_counter_ns
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.memory import UnsafePointer
 from std.os.env import getenv
 
@@ -80,11 +80,11 @@ comptime READ_BUFFER_SIZE: Int = 65536
 # via `OwnedDLHandle` and hold the function pointers for the duration
 # of the server. CUdeviceptr is unsigned 64-bit on the platforms we
 # support (linux-aarch64 / linux-x86_64).
-alias CUdeviceptr = UInt64
-alias CUresult = Int32
+comptime CUdeviceptr = UInt64
+comptime CUresult = Int32
 
-alias HtoDFn = def (CUdeviceptr, UnsafePointer[UInt8, MutAnyOrigin], c_size_t) thin abi("C") -> CUresult
-alias DtoHFn = def (UnsafePointer[UInt8, MutAnyOrigin], CUdeviceptr, c_size_t) thin abi("C") -> CUresult
+comptime HtoDFn = def (CUdeviceptr, UnsafePointer[UInt8, MutAnyOrigin], c_size_t) thin abi("C") -> CUresult
+comptime DtoHFn = def (UnsafePointer[UInt8, MutAnyOrigin], CUdeviceptr, c_size_t) thin abi("C") -> CUresult
 
 
 # ── Socket primitives (the mojo-http vintage) ───────────────────────────
@@ -201,18 +201,26 @@ def send_str(fd: c_int, s: String):
 # blocking variant — synchronous, which is what we want at the byte
 # level for a request/response server.
 
-def cuda_memcpy_h2d(htod: HtoDFn,
+def cuda_memcpy_h2d(ref cuda: OwnedDLHandle,
                     dst_dev: UnsafePointer[UInt8, MutAnyOrigin],
                     src_host: UnsafePointer[UInt8, MutAnyOrigin],
-                    count: Int) -> Bool:
+                    count: Int) raises -> Bool:
+    """dev2026080106: resolve the symbol per call rather than holding a cached
+    function pointer. `get_function` now returns a callable carrying an
+    immutable borrow of the handle, so the library cannot be dlclose'd between
+    dlsym and the call — a cached raw pointer is exactly the dangling case the
+    upstream fix removes. dlsym is a hash lookup; noise next to a device copy."""
+    var htod = cuda.get_function[CUresult]("cuMemcpyHtoD_v2")
     var rc = htod(CUdeviceptr(Int(dst_dev)), src_host, c_size_t(count))
     return Int(rc) == 0
 
 
-def cuda_memcpy_d2h(dtoh: DtoHFn,
+def cuda_memcpy_d2h(ref cuda: OwnedDLHandle,
                     dst_host: UnsafePointer[UInt8, MutAnyOrigin],
                     src_dev: UnsafePointer[UInt8, MutAnyOrigin],
-                    count: Int) -> Bool:
+                    count: Int) raises -> Bool:
+    """See `cuda_memcpy_h2d` — same per-call resolution rationale."""
+    var dtoh = cuda.get_function[CUresult]("cuMemcpyDtoH_v2")
     var rc = dtoh(dst_host, CUdeviceptr(Int(src_dev)), c_size_t(count))
     return Int(rc) == 0
 
@@ -264,7 +272,7 @@ struct ServerState(Copyable, Movable):
     Shared:
       `capacity`     total device buffer size.
       `tail_offset`  next free byte in the device buffer.
-      `htod` / `dtoh` cached CUDA memcpy function pointers.
+      `cuda` owned libcuda handle; memcpy symbols resolved per call.
     """
     var capacity: Int
     var tail_offset: Int
@@ -278,10 +286,10 @@ struct ServerState(Copyable, Movable):
     var tasks: Dict[Int, TaskRecord]
     var next_task_id: Int
 
-    var htod: HtoDFn
-    var dtoh: DtoHFn
+    # dev2026080106: own the dlopen handle; resolve memcpy symbols per call.
+    var cuda: OwnedDLHandle
 
-    def __init__(out self, capacity: Int, htod: HtoDFn, dtoh: DtoHFn):
+    def __init__(out self, capacity: Int, var cuda: OwnedDLHandle):
         self.capacity = capacity
         self.tail_offset = 0
         self.q_head_idx = 0
@@ -289,8 +297,7 @@ struct ServerState(Copyable, Movable):
         self.kv = Dict[String, KVRecord]()
         self.tasks = Dict[Int, TaskRecord]()
         self.next_task_id = 1
-        self.htod = htod
-        self.dtoh = dtoh
+        self.cuda = cuda^
 
     def queue_count(self) -> Int:
         return len(self.q_records) - self.q_head_idx
@@ -334,7 +341,7 @@ def _gpu_write(
     if state.tail_offset + n > state.capacity:
         return -1
     var dst_offset = state.tail_offset
-    if not cuda_memcpy_h2d(state.htod, dev_base + dst_offset, src, n):
+    if not cuda_memcpy_h2d(state.cuda, dev_base + dst_offset, src, n):
         return -1
     state.tail_offset += n
     return dst_offset
@@ -349,7 +356,7 @@ def _gpu_read(
     var stage = List[UInt8](capacity=n)
     for _ in range(n):
         stage.append(0)
-    if not cuda_memcpy_d2h(state.dtoh, stage.unsafe_ptr(), dev_base + offset, n):
+    if not cuda_memcpy_d2h(state.cuda, stage.unsafe_ptr(), dev_base + offset, n):
         return None
     return Optional(stage^)
 
@@ -445,14 +452,14 @@ def handle_bench_bandwidth(
 
     # Time H2D.
     var t0 = perf_counter_ns()
-    var ok_h2d = cuda_memcpy_h2d(state.htod, dev_ptr, host_buf.unsafe_ptr(), size_bytes)
+    var ok_h2d = cuda_memcpy_h2d(state.cuda, dev_ptr, host_buf.unsafe_ptr(), size_bytes)
     var t1 = perf_counter_ns()
     if not ok_h2d:
         send_str(client_fd, String("-ERR H2D memcpy failed\r\n"))
         return
 
     # Time D2H back into the same buffer (overwrites the 0x5A fill, fine).
-    var ok_d2h = cuda_memcpy_d2h(state.dtoh, host_buf.unsafe_ptr(), dev_ptr, size_bytes)
+    var ok_d2h = cuda_memcpy_d2h(state.cuda, host_buf.unsafe_ptr(), dev_ptr, size_bytes)
     var t2 = perf_counter_ns()
     if not ok_d2h:
         send_str(client_fd, String("-ERR D2H memcpy failed\r\n"))
@@ -876,9 +883,7 @@ def _demo() raises:
     print("└──────────────────────────────────────────────────────┘")
     print("[gpuq] resolving CUDA Driver API via libcuda.so.1...")
     var cuda = OwnedDLHandle("libcuda.so.1")
-    var htod = cuda.get_function[HtoDFn]("cuMemcpyHtoD_v2")
-    var dtoh = cuda.get_function[DtoHFn]("cuMemcpyDtoH_v2")
-    print("[gpuq] CUDA memcpy entrypoints bound")
+    print("[gpuq] CUDA driver handle opened (symbols resolved per call)")
 
     print("[gpuq] allocating", capacity_mb, "MiB on GPU device 0...")
     var ctx = DeviceContext()
@@ -886,7 +891,7 @@ def _demo() raises:
     var dev_base = dev_buf.unsafe_ptr().bitcast[UInt8]()
     print("[gpuq] device buffer allocated, base ptr =", Int(dev_base))
 
-    var state = ServerState(capacity_bytes, htod, dtoh)
+    var state = ServerState(capacity_bytes, cuda^)
 
     # TCP listener.
     var sock = socket_create()

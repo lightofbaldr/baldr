@@ -17,7 +17,11 @@ def format_log_line(req: Request, resp: Response, start_ns: UInt) -> String:
 
     Format:  METHOD PATH → STATUS  (BYTES bytes, MILLIS ms)
     """
-    var end_ns = perf_counter_ns()
+    # `perf_counter_ns()` is Int, `start_ns` is UInt, and dev2026080106 no longer
+    # converts between them implicitly. Convert the endpoint so the subtraction is
+    # UInt - UInt: both are monotonic ns timestamps, end >= start, so unsigned is
+    # the correct domain and an underflow here would be a real bug worth trapping.
+    var end_ns = UInt(perf_counter_ns())
     var elapsed_us = (end_ns - start_ns) // 1000
     var elapsed_ms_int = elapsed_us // 1000
     var elapsed_ms_frac = elapsed_us % 1000

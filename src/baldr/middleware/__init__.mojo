@@ -10,7 +10,7 @@ Typical pattern:
     var limiter = RateLimit()
 
     def dispatch(req: Request) raises -> Response:
-        var t0 = perf_counter_ns()
+        var t0 = UInt(perf_counter_ns())  # Mojo 1.0: no implicit Int -> UInt; the logger takes UInt ns
 
         var retry = limiter.check(req.path, cooldown_s=5)
         if retry > 0:
