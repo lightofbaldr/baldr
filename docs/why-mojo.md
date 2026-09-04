@@ -96,7 +96,7 @@ comptime for i in range(len(Ms)):
         break
 ```
 
-That `comptime for` (straight from `run_middleware`) runs *at compile time*. The loop is unrolled; each middleware's `before` call is monomorphized in place. Your five-stage pipeline becomes five direct, inlined calls, not five dictionary lookups.
+That `comptime for` (straight from `Chain.before`) runs *at compile time*. The loop is unrolled; each middleware's `before` call is monomorphized in place. Your five-stage pipeline becomes five direct, inlined calls, not five dictionary lookups.
 
 And because a handler is a struct, it **owns its state between requests**. A rate limiter's counters, a template cache, a queue handle — they're fields on your struct, initialized once, mutated in place via `mut self`. No `global`, no dependency-injection container, no per-request re-instantiation. The state model is just… a struct.
 

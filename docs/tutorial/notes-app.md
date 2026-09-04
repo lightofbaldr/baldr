@@ -64,7 +64,7 @@ Two things changed from the hello-world handler:
 - It has real fields. `mut self` (below) is what lets `__call__` push a new note onto `self.notes` and have it still be there next request.
 
 !!! note "Why `Movable` but not `Copyable` here?"
-    `App.run_routes` takes ownership of your handler for the life of the server (`var handler: H`), so it only needs to *move* it in once. `Copyable` isn't required and we leave it off — same as the `chat` example. This is a Mojo ownership detail; the [primer](../mojo-primer.md#3-ownership-mut-var-out) covers `var`/`mut`.
+    `App.run` takes ownership of your handler for the life of the server (`var handler: H`), so it only needs to *move* it in once. `Copyable` isn't required and we leave it off — same as the `chat` example. This is a Mojo ownership detail; the [primer](../mojo-primer.md#3-ownership-mut-var-out) covers `var`/`mut`.
 
 ## Dispatch: `__call__(mut self, req, params, name)`
 
@@ -218,7 +218,7 @@ The validators are just structs conforming to a `Validator` trait, run through a
 
 ## Wiring it up
 
-`main` registers the routes as data, constructs the handler with its initial (empty) state, and hands it to `run_routes`:
+`main` registers the routes as data, constructs the handler with its initial (empty) state, and hands it to `run`:
 
 ```mojo
 def main() raises:
@@ -233,7 +233,7 @@ def main() raises:
         next_id=1,
         templates=templates^,
     )
-    app.run_routes(handler^, port=8080)
+    app.run(handler^, port=8080)
 ```
 
 The route *names* (`"index"`, `"note_show"`, ...) are exactly what `__call__` branches on above — the route table is the single source of truth for both routing and dispatch. They also still earn their keep on the routing side: registering `/notes/{id}` for `GET` and `/notes` for `POST` is what gives you a real `405 Method Not Allowed` (with an `Allow` header) when someone `DELETE`s a path you only registered for `GET`. That logic lives in the router, not your handler.

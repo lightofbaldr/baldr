@@ -27,8 +27,8 @@ across 18 pages, deduplicated and ranked here. File:line references are to `src/
 callable or a `mut`-able trait value in a struct field. That single language gap directly forces:
 
 - the **routing double-dispatch** — *name-threading shipped* (handler now gets the matched name); full per-route *fn* binding still blocked here,
-- the **six `run_*` methods** (can't store optional middleware/error/lifecycle, so each combo is its own method),
-- **stateless middleware** (can't call `mut self` on a variadic-pack element).
+- ~~the **six `run_*` methods**~~ ✅ shipped 2026-09-04: the parts are type parameters of `App` (`App(middleware=, errors=, lifecycle=)`), one `run`,
+- ~~**stateless middleware**~~ ✅ shipped 2026-09-04: stages are App fields (lvalues), both hooks take `mut self`.
 
 **Action:** watch the Modular changelog for storable fn pointers / callable trait objects. When it
 lands, design the builder API + per-route binding + `mut self` middleware *together* — ~5 of the
@@ -42,21 +42,21 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
    `RouteHandler.__call__(mut self, req, params, name)`; handlers dispatch by name. *Remaining (deferred
    to storable fns):* per-route *function* binding so the handler isn't a manual `if name == ...` ladder.
 
-2. **Six `run_*` methods** (`run`, `run_routes`, `run_middleware`, `run_routes_middleware`,
-   `run_routes_middleware_eh`, `run_full`) hard-code every feature combination into a method name and
-   a positional arg order — and switching runners silently changes the required handler trait
-   (`DispatchHandler` ↔ `RouteHandler`). Collapse to one builder:
-   `App().middleware(...).errors(...).lifecycle(...).run(handler, port=)`. `app.mojo`:184-604.
+2. ~~**Six `run_*` methods**~~ ✅ **SHIPPED 2026-09-04.** `App[M, E, L]` carries middleware / error
+   handler / lifecycle as defaulted type parameters (`App(middleware=Chain((a, b)), errors=JsonErrorHandler(),
+   lifecycle=hooks)`), and there is one `run` overloaded on the handler trait; `app.handle(handler, req)`
+   runs the pipeline in-process for tests. Not a fluent builder chain (a builder must store values of
+   unknown type, which Mojo 1.0 cannot) — same ergonomics, order-independent, each part optional. The
+   six runners remain as deprecated wrappers until v0.2.
 
 3. ~~**`String("...")` on every literal.**~~ ✅ **SHIPPED (see above)** — implicit `StringLiteral →
    String` was already live in the nightly; docs teach bare literals now. Optional follow-up: strip the
    ~515 legacy wraps from `src/baldr/` (mechanical, guarded by the 460-test suite).
 
-4. **Middleware can't hold state.** `Middleware.before/after` take `self`, not `mut self` (the
-   variadic chain dispatches over rvalues). Consequences: you **cannot time a request** in middleware
-   (no place to stash a start timestamp — the built-in `RequestLogger` had to drop latency), and
-   **rate-limiting can't be a middleware stage** at all. Same root cause as #1/#2.
-   `middleware/chain.mojo`:51, 84-101, 104-113.
+4. ~~**Middleware can't hold state.**~~ ✅ **SHIPPED 2026-09-04.** Both hooks take `mut self`; stages
+   are fields of the App (a `Chain` holds them in a `Tuple`) so they are lvalues. `RequestLogger` now
+   logs elapsed ms; `RateLimitMW(cooldown_s, what)` is a chain stage keyed on `req.peer`. Conformers
+   may still declare `self`.
 
 5. **Concurrency ⟂ everything else.** `run_concurrent` (prefork) bypasses the whole App pipeline — no
    routes, middleware, error handler, lifecycle, or static mounts — so a real app *cannot be run

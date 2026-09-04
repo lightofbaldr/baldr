@@ -70,7 +70,7 @@ def main() raises:
     var rec2 = Recorder(String("two"))
     var req = Request()
     var out = Response.text(String("hello"))
-    var blocked = apply_middleware[ Recorder, Recorder ](req, out, rec1, rec2)
+    var blocked = apply_middleware[ Recorder, Recorder ](req, out, rec1^, rec2^)
     r.check("pass-through not blocked", not blocked)
     r.check("pass-through status 200", out.status == 200)
     # before-ran is observed via X-Before on the MW_PASS response which is
@@ -85,7 +85,7 @@ def main() raises:
     var rec3 = Recorder(String("three"))
     var req2 = Request()
     var out2 = Response.text(String("should-not-reach"))
-    var blocked2 = apply_middleware[ AlwaysBlock, Recorder ](req2, out2, block, rec3)
+    var blocked2 = apply_middleware[ AlwaysBlock, Recorder ](req2, out2, block^, rec3^)
     r.check("short-circuit blocked True", blocked2)
     r.check("short-circuit status 403", out2.status == 403)
     # after-not-run when blocked: confirmed by absence of X-Order (Recorder
@@ -100,7 +100,7 @@ def main() raises:
     var sec = SecurityHeaders()
     var req3 = Request()
     var out3 = Response.html(String("<h1>hi</h1>"))
-    _ = apply_middleware[ SecurityHeaders ](req3, out3, sec)
+    _ = apply_middleware[ SecurityHeaders ](req3, out3, sec^)
     var has_csp = False
     var has_nosniff = False
     var has_frame = False

@@ -14,9 +14,9 @@ Public API as of Phase 5:
   from baldr.validation import Required, StringLength, FieldType, validate_json
   from baldr.assets     import AssetManifest, AssetRecord, build_assets, content_hash, manifest_to_context
   from baldr.config     import ServerConfig
-  from baldr.errors     import ErrorHandler, JsonErrorHandler, HtmlErrorHandler
+  from baldr.errors     import ErrorHandler, DefaultErrorHandler, JsonErrorHandler, HtmlErrorHandler
   from baldr.testing    import TestClient, RouteTestClient, get, post, post_json, put, delete
-  from baldr.lifecycle   import LifecycleHooks
+  from baldr.lifecycle   import LifecycleHooks, NoLifecycle
   from baldr.concurrency import run_concurrent
   from baldr.templates  import Templates
   from baldr.template   import Value
@@ -26,7 +26,7 @@ Public API as of Phase 5:
 from baldr.middleware.security_headers import apply_security_headers
 from baldr.middleware.ratelimit        import RateLimit, make_429
 from baldr.middleware.logger           import log_request
-from baldr.middleware.chain             import Middleware, SecurityHeaders, RequestLogger, apply_middleware
+from baldr.middleware.chain             import Middleware, Chain, NoMiddleware, SecurityHeaders, RequestLogger, RateLimitMW, apply_middleware
 
 Phase roadmap:
 

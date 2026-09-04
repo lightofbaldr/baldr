@@ -3,6 +3,37 @@
 All versions are `0.1.0-alpha.*` until the v0.1 release.
 Newest entries first.
 
+## One `run`: the App carries its parts (2026-09-04)
+
+- **`App[M: Middleware = NoMiddleware, E: ErrorHandler = DefaultErrorHandler,
+  L: LifecycleHooks = NoLifecycle]`.** Middleware, the error handler and the
+  lifecycle hooks are type parameters with defaults, inferred from the
+  constructor: `App()`, `App(errors=JsonErrorHandler())`,
+  `App(middleware=Chain((SecurityHeaders(), RequestLogger())), errors=...,
+  lifecycle=...)`. Keyword-only overloads cover every combination.
+- **One `run`**, overloaded on the handler trait: a `RouteHandler` gets the
+  route table resolved (405 + `Allow` / 404), a `DispatchHandler` routes by
+  hand. Per request: static → assets → `before` → routes → handler → `after`
+  → error handler. `App.handle(handler, req)` runs the same pipeline on one
+  in-memory request for tests (new suite `tests/test_app_pipeline.mojo`, 39
+  checks).
+- **Stateful middleware.** `Middleware.before/after` take `mut self`; stages
+  are App fields (a `Chain[*Ms]` holds them in a `Tuple`). `RequestLogger`
+  logs elapsed milliseconds; new `RateLimitMW(cooldown_s, what)` is a chain
+  stage keyed on `req.peer`. `NoMiddleware`, `DefaultErrorHandler`,
+  `NoLifecycle` are the defaults; `JsonErrorHandler` / `HtmlErrorHandler`
+  are `Defaultable`, so `App[E=JsonErrorHandler]()` works.
+- **Deprecated, still working:** `run_routes`, `run_middleware`,
+  `run_routes_middleware`, `run_routes_middleware_eh`, `run_full` — each is
+  `run` with the parts as arguments. Removed at v0.2. One behaviour change:
+  an unparseable request now goes through the error handler
+  (`render_error(400, ...)`), so with `JsonErrorHandler` a bad request is JSON
+  rather than the old plain-text `400 bad request`.
+- `apply_middleware` takes its stages by value (`var *mws`); `App` is no
+  longer `Copyable`.
+- Punch-list P0 #2 and #4 close. Per-route *function* binding still waits on
+  storable function pointers.
+
 ## Mojo 1.0.0 stable, the GPU split, and the public tree catches up (2026-09-04)
 
 - **Toolchain:** `mojo==1.0.0` / `max==26.5.0` from the `conda.modular.com/max`

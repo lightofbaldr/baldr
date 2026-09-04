@@ -52,12 +52,13 @@ baldr ships two ready-made handlers so you usually don't write your own:
 | `JsonErrorHandler` | `{"error": "...", "status": N}` — for APIs |
 | `HtmlErrorHandler` | a styled HTML page — for browser apps |
 
-You wire an error handler in through the run methods that accept one — `run_routes_middleware_eh` or `run_full` (see [The Handler Trait](handler.md) for the full table):
+You wire an error handler in by constructing the App with it (see [The Handler Trait](handler.md)):
 
 ```mojo
 from baldr.errors import JsonErrorHandler
 
-app.run_routes_middleware_eh(MyRoutes(), RequestLogger(), JsonErrorHandler(), port=8080)
+var app = App(middleware=RequestLogger(), errors=JsonErrorHandler())
+app.run(MyRoutes(), port=8080)
 ```
 
 Now any status baldr raises (a 404 from the router, a 500 from a handler that threw) flows through `render_error` and comes back in your chosen shape.

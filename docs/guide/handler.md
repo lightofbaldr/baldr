@@ -68,83 +68,52 @@ The handler is your application object. `run(...)` just calls it in a loop.
 !!! tip "State is set up in the constructor"
     `@fieldwise_init` gives you `Counter(0, "hello")` — one argument per field, in declaration order (bare string literals convert to `String` automatically). Do heavier one-time setup (open a file, parse templates) in a hand-written `__init__(out self)` and stash the result in a field. It runs once, before the socket binds.
 
-## The `run_*` family
+## One `run`, parts on the App
 
-baldr does not have one `run`. It has **six**, and each one bolts on a different optional feature. You call exactly one, and its compile-time signature tells you which handler trait to conform to and what else to pass.
-
-| Method | Handler trait | Adds | You get |
-|---|---|---|---|
-| `run` | `DispatchHandler` | — | bare accept loop; you route by hand |
-| `run_routes` | `RouteHandler` | route table | path matching + `params`, auto 404/405 |
-| `run_middleware` | `DispatchHandler` | middleware | `before`/`after` pipeline, no routing |
-| `run_routes_middleware` | `RouteHandler` | routes + middleware | both of the above |
-| `run_routes_middleware_eh` | `RouteHandler` | + error handler | custom 500 rendering (JSON/HTML) |
-| `run_full` | `RouteHandler` | + lifecycle hooks | startup/shutdown + everything above |
-
-Static file mounts (`app.static(...)`) and asset mounts (`app.assets(...)`) work with **all six** — they're pure data, resolved before your handler on every path.
-
-### Reading the signatures
-
-Here are the real signatures, trimmed to the parts you pass. Note the split: `[...]` is compile-time, `(...)` is runtime.
+There is one accept loop, `app.run(handler, port=...)`, and it accepts either
+handler trait. What sits between the socket and your handler is decided when
+you **construct** the App:
 
 ```mojo
-def run[H: DispatchHandler](
-    self, var handler: H,
-    host: String = "0.0.0.0", port: Int = 8080,
-) raises
-
-def run_routes[H: RouteHandler](
-    self, var handler: H,
-    host: String = "0.0.0.0", port: Int = 8080,
-) raises
-
-def run_middleware[H: DispatchHandler, *Ms: Middleware](
-    self, var handler: H, *mws: *Ms,
-    host: String = "0.0.0.0", port: Int = 8080,
-) raises
-
-def run_routes_middleware[H: RouteHandler, *Ms: Middleware](
-    self, var handler: H, *mws: *Ms,
-    host: String = "0.0.0.0", port: Int = 8080,
-) raises
-
-def run_routes_middleware_eh[H: RouteHandler, *Ms: Middleware, E: ErrorHandler](
-    self, var handler: H, var eh: E, *mws: *Ms,
-    host: String = "0.0.0.0", port: Int = 8080,
-) raises
-
-def run_full[H: RouteHandler, *Ms: Middleware, E: ErrorHandler, L: LifecycleHooks](
-    self, var handler: H, var eh: E, var lifecycle: L, *mws: *Ms,
-    host: String = "0.0.0.0", port: Int = 8080,
-) raises
+struct App[
+    M: Middleware = NoMiddleware,        # one stage, or Chain((a, b, c))
+    E: ErrorHandler = DefaultErrorHandler,
+    L: LifecycleHooks = NoLifecycle,
+](Movable)
 ```
 
-!!! note "`[H: DispatchHandler]` and `*Ms: Middleware` are compile-time params"
-    The `[...]` list holds types resolved at build time — `H` is your handler's type, `*Ms` is the variadic pack of middleware types. Because they're monomorphized in, there is **no per-request vtable lookup**; the dispatch is baked into the binary. You almost never write the brackets — the compiler infers `H` and `*Ms` from the values you pass. See [square-bracket params in the primer](../mojo-primer.md).
-
-The important runtime detail: **the fixed arguments come before the variadic `*mws`.** So the error handler and lifecycle hooks are positional, threaded in *ahead* of the middleware pack:
+You never write the `[...]`. Pass a part and the compiler infers its type; leave
+one out and it is default-constructed:
 
 ```mojo
-app.run_routes_middleware_eh(
-    handler,              # H
-    JsonErrorHandler(),   # E  — comes before the middleware
-    SecurityHeaders(),    # first Ms
-    RequestLogger(),      # second Ms
-    port=8080,
-)
-
-app.run_full(
-    handler,              # H
-    HtmlErrorHandler(),   # E
-    MyLifecycle(),        # L
-    SecurityHeaders(),    # Ms...
-    port=8080,
+var app = App()                                                  # bare server
+var api = App(errors=JsonErrorHandler())                         # JSON error bodies
+var site = App(
+    middleware=Chain((SecurityHeaders(), RequestLogger())),
+    errors=HtmlErrorHandler(),
+    lifecycle=MyHooks(),
 )
 ```
 
-### Growing an app one runner at a time
+Per request: static mounts → asset mount → `middleware.before` → route table
+(for a `RouteHandler`) → your handler → `middleware.after`, and any exception is
+rendered by the error handler. `lifecycle.on_startup()` runs once before the
+bind, `on_shutdown()` once after the loop exits.
 
-The methods form a ladder. You climb it as your app needs more.
+### Which trait, then?
+
+`run` is overloaded on the handler's trait, so the question is only about your
+handler, never about a runner:
+
+| Your handler conforms to | `run` does | You get |
+|---|---|---|
+| `DispatchHandler` — `__call__(mut self, req)` | calls it directly; the route table is ignored | route by hand |
+| `RouteHandler` — `__call__(mut self, req, params, name)` | resolves `app.get/post/...` first | `params`, the matched `name`, automatic 404 / 405 + `Allow` |
+
+Static mounts (`app.static(...)`) and asset mounts (`app.assets(...)`) work with
+both — they are pure data, resolved before middleware and before the handler.
+
+### Growing an app
 
 **Bare.** You own routing:
 
@@ -160,13 +129,13 @@ def main() raises:
     App().run(Api(), port=8080)
 ```
 
-**With routes.** Register patterns, switch to a `RouteHandler`, receive `params` and the matched route `name`:
+**With routes.** Register patterns, switch to a `RouteHandler`, receive `params`
+and the matched route `name`:
 
 ```mojo
 @fieldwise_init
 struct Api(RouteHandler, Copyable, Movable):
     def __call__(mut self, req: Request, params: Params, name: String) raises -> Response:
-        # the route table already matched; branch on the matched route's NAME
         if name == "show_user":
             return Response.text("user " + params.get("id") + "\n")
         return Response.text("not found\n", 404)
@@ -174,59 +143,57 @@ struct Api(RouteHandler, Copyable, Movable):
 def main() raises:
     var app = App()
     app.get("/users/{id}", "show_user")
-    app.run_routes(Api(), port=8080)
+    app.run(Api(), port=8080)
 ```
 
-**Full stack.** Routes, a middleware pipeline, a JSON error shape, and startup/shutdown hooks — all in one call:
+**Full stack.** Routes, a middleware pipeline, a JSON error shape, and
+startup/shutdown hooks — the parts go on the App, the handler stays the same:
 
 ```mojo
 def main() raises:
-    var app = App()
-    app.get("/users/{id}", "show_user")
-    app.run_full(
-        Api(),
-        JsonErrorHandler(),
-        MyLifecycle(),
-        SecurityHeaders(),
-        RequestLogger(),
-        port=8080,
+    var app = App(
+        middleware=Chain((SecurityHeaders(), RequestLogger())),
+        errors=JsonErrorHandler(),
+        lifecycle=MyLifecycle(),
     )
+    app.get("/users/{id}", "show_user")
+    app.run(Api(), port=8080)
 ```
 
-Same handler struct throughout (once you're on the routing traits). You're only changing which runner wraps it.
+### Testing without a socket
 
-!!! warning "Switching runners can change your handler's signature"
-    `run` and `run_middleware` want a **`DispatchHandler`** — `__call__(mut self, req)`. Every other runner wants a **`RouteHandler`** — `__call__(mut self, req, params, name)`. Moving from `run_middleware` to `run_routes_middleware` means adding the `params: Params` and `name: String` parameters to `__call__` (and swapping any `req.path` branching for `if name == "...":`). It's a small edit, but the compiler error ("no matching `__call__`") won't spell it out for you. Know which family you're in.
+`app.handle(handler, req)` runs the same pipeline on one in-memory request and
+returns the `Response`. Build requests with `baldr.testing.get/post/...`; the
+handler is borrowed `mut`, and the parts are public fields, so you can assert on
+their state afterwards (`app.middleware.stages[1].befores`).
 
-## The honest rough edge: six runners is a lot
+### Why parameters, not a builder chain
 
-Let's name it, because it's the biggest wart on this API.
+The earlier draft of this page wanted
+`App().middleware(...).errors(...).lifecycle(...).run(handler)`. Mojo 1.0 still
+cannot store a function or a trait object in a struct field, so a builder that
+accumulates *values of unknown type* is not expressible. What it **can** store is
+a concrete `M`, `E`, `L` — and a `Chain[*Ms]` holds its stages in a `Tuple`. So
+the parts became type parameters with defaults, and because they are fields of
+the App, middleware stages are lvalues and may mutate themselves: a stage can
+time a request or hold a rate-limit table, which the old variadic runners could
+not offer. Per-route *function* binding is the one item that still waits on the
+language.
 
-Six `run_*` methods is a **combinatorial explosion of optional features.** Routing, middleware, error handling, and lifecycle are four independent switches, and today each *combination* baldr supports is a separately-named method with the features hard-coded into its name and its parameter order. Want routes + lifecycle but *not* a custom error handler? There's no method for that — you take `run_full` and pass a default `JsonErrorHandler()` you didn't ask for. The feature set is a menu, but you can only order the fixed combos.
+### The deprecated runners
 
-The shape this *wants* to be is a builder:
-
-```mojo
-# NOT the current API — the ergonomic target
-App()
-    .middleware(SecurityHeaders(), RequestLogger())
-    .errors(JsonErrorHandler())
-    .lifecycle(MyLifecycle())
-    .run(handler, port=8080)
-```
-
-One `run`, features composed in any combination, order-independent, each optional. That collapses six methods (and the handful of combinations they *don't* cover) into one path.
-
-Why it isn't built yet: a builder needs the `App` struct to *store* a heterogeneous, optional set of middleware/error/lifecycle values in its fields — and Mojo 1.0 doesn't yet guarantee storable function pointers or trait objects you can stash in an `Optional`. That's the same constraint that made handlers structs in the first place. So for now the features are threaded through compile-time params on each runner instead of stored on the `App`. When Mojo's trait-object story stabilizes, the builder is the plan.
-
-Until then: pick your row in the table, match the handler trait, mind the argument order.
+`run_routes`, `run_middleware`, `run_routes_middleware`,
+`run_routes_middleware_eh` and `run_full` still compile and behave as in v0.1;
+each is `run` with the parts passed as arguments. They ignore the App's own
+parts and go away at v0.2 — see the [App reference](../reference/app.md#deprecated-runners)
+for the one-line rewrite of each.
 
 ## Recap
 
 - Your app is a **struct** conforming to `DispatchHandler` (`__call__(mut self, req)`) or `RouteHandler` (`+ params, name` — branch on `name` to dispatch).
 - It's a struct so it can **own state between requests** — caches, counters, rate limiters, loaders live in fields; `mut self` lets `__call__` update them.
 - Compile-time `[H]` / `*Ms` params monomorphize the dispatch — no per-request vtable.
-- Pick one of six `run_*` methods; the method decides which handler trait you conform to and what else you pass. Fixed args (`eh`, `lifecycle`) come *before* the `*mws` pack.
-- The six-method sprawl is a known rough edge; a builder is the roadmap.
+- One `run`. The parts — `middleware=`, `errors=`, `lifecycle=` — go on the App at construction; the handler's trait decides whether the route table is resolved.
+- Middleware stages are App fields, so they may keep state (`mut self`); `app.handle(handler, req)` runs the pipeline without a socket for tests.
 
 Next: **[Get Started →](../get-started.md)** if you haven't built one yet, or the **[First Steps tutorial →](../tutorial/first-steps.md)** to see the simplest handler end to end.

@@ -32,9 +32,12 @@ Conformers wrap the existing free-function middleware
 hand-woven pattern and the v0.2 chain pattern share one implementation.
 """
 
+from std.time import perf_counter_ns
+
 from ..request import Request
 from ..response import Response
 from .security_headers import apply_security_headers, DEFAULT_CSP
+from .ratelimit import RateLimit, make_429, now_epoch_s
 
 
 comptime MW_PASS = 0  # sentinel: before() returns status==MW_PASS to continue
@@ -43,26 +46,67 @@ comptime MW_PASS = 0  # sentinel: before() returns status==MW_PASS to continue
 trait Middleware(Movable, Deinitable):
     """A composable middleware stage.
 
-    Conform a `@fieldwise_init` struct (Copyable, Movable) to this trait
-    and pass instances to `App.use[*Ms]` / `apply_middleware`. Stateless
-    conformers (security headers, logging) are the common case; stateful
-    ones (rate limiter holding a Dict) hold their own state via fields.
+    Conform a struct to this trait and hand it to `App(middleware=...)` —
+    a single stage, or several composed with `Chain((a, b, c))`. Stateless
+    conformers (security headers) are the common case; stateful ones (a
+    rate limiter holding a Dict, a logger timing each request) keep their
+    state in fields — both hooks take `mut self` since Mojo 1.0.0, because
+    the `App` owns its middleware as a field and calls it as an lvalue.
+    Conformers that don't need to mutate may still declare `self`.
     """
-    def before(self, req: Request) raises -> Response:
+    def before(mut self, req: Request) raises -> Response:
         """Run before the handler. Return a Response with `status == 0`
-        (MW_PASS) to continue; return a real response to short-circuit.
-
-        Non-mut so it composes through the variadic chain dispatch
-        (mut-self on a variadic rvalue is not allowed in Mojo 1.0).
-        Stateful middleware that needs per-request pre-state must carry it
-        via the returned Response (e.g. an X-baldr-start header)."""
+        (MW_PASS) to continue; return a real response to short-circuit the
+        pipeline (the handler and every `after` hook are skipped)."""
         var r = Response()
         r.status = MW_PASS
         return r^
 
-    def after(self, req: Request, mut resp: Response) raises:
+    def after(mut self, req: Request, mut resp: Response) raises:
         """Run after the handler, mutating `resp` in place. Default: no-op."""
         pass
+
+
+# ── Composition ───────────────────────────────────────────────────────────
+@fieldwise_init
+struct NoMiddleware(Middleware, Defaultable, Copyable, Movable):
+    """The empty pipeline: `App()`'s default middleware. Passes every request
+    straight through and leaves every response alone."""
+    var _unused: Int
+
+    def __init__(out self):
+        self._unused = 0
+
+
+struct Chain[*Ms: Middleware](Middleware, Movable, Deinitable):
+    """Several middleware stages as one `Middleware`.
+
+    `before` hooks run in order and the first non-`MW_PASS` response wins
+    (later stages, the handler and all `after` hooks are skipped); `after`
+    hooks run in order over the handler's response. The pipeline is
+    monomorphized over the concrete stage types — no per-request vtable
+    dispatch — and each stage is an lvalue field, so stages may mutate
+    themselves. Chains nest: a `Chain` is itself a `Middleware`.
+
+        App(middleware=Chain((SecurityHeaders(), RequestLogger())))
+    """
+    var stages: Tuple[*Self.Ms]
+
+    def __init__(out self, var stages: Tuple[*Self.Ms]):
+        self.stages = stages^
+
+    def before(mut self, req: Request) raises -> Response:
+        comptime for i in range(len(Self.Ms)):
+            var pre = self.stages[i].before(req)
+            if pre.status != MW_PASS:
+                return pre^
+        var r = Response()
+        r.status = MW_PASS
+        return r^
+
+    def after(mut self, req: Request, mut resp: Response) raises:
+        comptime for i in range(len(Self.Ms)):
+            self.stages[i].after(req, resp)
 
 
 # ── Built-in conformers (wrap the v0.1 free-function middleware) ──────────
@@ -83,41 +127,58 @@ struct SecurityHeaders(Middleware, Copyable, Movable):
 
 @fieldwise_init
 struct RequestLogger(Middleware, Copyable, Movable):
-    """Log each request after it completes.
-
-    Stateless across requests (the variadic chain forbids mut-self), so it
-    cannot carry a per-request start timestamp through `before`/`after`.
-    Instead it logs method, path, and status — the most useful fields for a
-    single-binary deployment. Apps that need elapsed time can compute it in
-    their handler and add an `X-baldr-elapsed` header this logger would pick
-    up, or use the v0.1 free-function `log_request` directly with a captured
-    start time."""
-    var placeholder: Int  # kept so @fieldwise_init has a field
+    """Log each request after it completes: method, path, status and the
+    elapsed milliseconds. Stateful: `before` stamps the start time, `after`
+    reads it — the `mut self` hooks make that possible."""
+    var start_ns: UInt
 
     def __init__(out self):
-        self.placeholder = 0
+        self.start_ns = UInt(0)
 
-    def after(self, req: Request, mut resp: Response) raises:
-        print(req.method, req.path, String("->"), String(resp.status))
+    def before(mut self, req: Request) raises -> Response:
+        self.start_ns = UInt(perf_counter_ns())
+        var r = Response()
+        r.status = MW_PASS
+        return r^
+
+    def after(mut self, req: Request, mut resp: Response) raises:
+        var elapsed_ms = (UInt(perf_counter_ns()) - self.start_ns) // UInt(1_000_000)
+        print(req.method, req.path, String("->"), String(resp.status), String(elapsed_ms) + "ms")
 
 
-# NOTE: RateLimitMW is intentionally NOT provided as a variadic-chain
-# conformer. A rate limiter must persist per-key hit times ACROSS requests,
-# which requires `mut self` on the middleware instance — but the variadic
-# chain dispatches on rvalues and cannot call mutating methods. Stateful
-# middleware like this stays hand-woven inside the handler (the v0.1
-# pattern) where the handler owns the `RateLimit` struct as a field and
-# mutates it via its own `mut self` (an lvalue). See `examples/route` and
-# the v0.1 `chat`/`scan` examples for the hand-woven pattern. A future
-# Mojo release with storable fn pointers / trait objects would let a
-# stateful RateLimitMW register through `App.use`.
+@fieldwise_init
+struct RateLimitMW(Middleware, Movable):
+    """Per-client cooldown as a middleware stage.
+
+    Keys on `req.peer` (the kernel-reported client IP; requests with an
+    unknown peer share one key). A client inside its cooldown gets the
+    standard `make_429` response — `Retry-After` set — before the handler
+    runs. Holds the `RateLimit` table across requests: the stateful case
+    the old variadic chain could not express."""
+    var limiter: RateLimit
+    var cooldown_s: Int
+    var what: String
+
+    def __init__(out self, cooldown_s: Int, what: String = String("requests")):
+        self.limiter = RateLimit()
+        self.cooldown_s = cooldown_s
+        self.what = what
+
+    def before(mut self, req: Request) raises -> Response:
+        var key = req.peer if req.peer.byte_length() > 0 else String("<unknown>")
+        var retry = self.limiter.check(key, self.cooldown_s, now_epoch_s())
+        if retry > 0:
+            return make_429(retry, self.what)
+        var r = Response()
+        r.status = MW_PASS
+        return r^
 
 
 # ── The pipeline runner ───────────────────────────────────────────────────
 def apply_middleware[*Ms: Middleware](
     req: Request,
     mut resp: Response,
-    *mws: *Ms,
+    var *mws: *Ms,
 ) raises -> Bool:
     """Run `before` hooks (short-circuit on non-zero status), then `after`
     hooks over `resp` in place.

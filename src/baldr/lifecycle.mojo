@@ -13,8 +13,24 @@ signal FFI can install a real SIGTERM/SIGINT handler.
 trait LifecycleHooks(Movable, Deinitable):
     """Called once before the accept loop and once after it exits.
 
-    Conform a struct and pass it to `App.run_full`. `on_startup` is the
-    place to build the asset manifest, open DB connections, warm caches;
-    `on_shutdown` drains them. Both may raise."""
+    Conform a struct and hand it to `App(lifecycle=...)` (or the deprecated
+    `App.run_full`). `on_startup` is the place to build the asset manifest,
+    open DB connections, warm caches; `on_shutdown` drains them. Both may
+    raise."""
     def on_startup(mut self) raises: ...
     def on_shutdown(mut self) raises: ...
+
+
+@fieldwise_init
+struct NoLifecycle(LifecycleHooks, Defaultable, Copyable, Movable):
+    """`App()`'s default: no startup or shutdown work."""
+    var _unused: Int
+
+    def __init__(out self):
+        self._unused = 0
+
+    def on_startup(mut self) raises:
+        pass
+
+    def on_shutdown(mut self) raises:
+        pass

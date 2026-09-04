@@ -12,13 +12,13 @@ a pipeline of them to the App and it threads each request through them in order.
 ## The shortest possible version
 
 baldr ships two ready-made stages, `SecurityHeaders` and `RequestLogger`. Wrap a
-handler with `app.run_middleware(handler, ...middleware)` and you're done:
+handler by handing the stages to the App and you're done:
 
 ```mojo
 from baldr.app import App, DispatchHandler
 from baldr.request import Request
 from baldr.response import Response
-from baldr.middleware.chain import SecurityHeaders, RequestLogger
+from baldr.middleware.chain import Chain, SecurityHeaders, RequestLogger
 
 
 @fieldwise_init
@@ -32,18 +32,13 @@ struct HelloHandler(DispatchHandler, Copyable, Movable):
 
 
 def main() raises:
-    var app = App()
-    app.run_middleware(
-        HelloHandler("baldr-mw"),
-        SecurityHeaders(),
-        RequestLogger(),
-        port=8096,
-    )
+    var app = App(middleware=Chain((SecurityHeaders(), RequestLogger())))
+    app.run(HelloHandler("baldr-mw"), port=8096)
 ```
 
 ```console
 $ pixi run example-middleware && build/example-middleware
-[baldr] listening on 0.0.0.0 port 8096 (middleware: 2 stages)
+[baldr] listening on 0.0.0.0 port 8096 (routes: 0)
 
 $ curl -si localhost:8096/ | head -6
 HTTP/1.1 200 OK
@@ -194,19 +189,17 @@ Note the two return paths. On success you build a bare `Response()` and set its
 
 ## Wiring it up
 
-Compose a pipeline by listing stages after the handler. For a plain
-`DispatchHandler`, use `run_middleware`:
+Hand the App one stage, or several composed with `Chain((...))` — a tuple
+literal, hence the double parentheses. Then `run` your handler:
 
 ```mojo
 def main() raises:
-    var app = App()
-    app.run_middleware(
-        HelloHandler("secure"),
+    var app = App(middleware=Chain((
         TokenGate("hunter2"),   # runs first
         ServerBanner("baldr"),
         AccessLog("[req]"),
-        port=8080,
-    )
+    )))
+    app.run(HelloHandler("secure"), port=8080)
 ```
 
 ```console
@@ -217,31 +210,23 @@ $ curl -s -H "Authorization: Bearer hunter2" localhost:8080/
 <h1>secure</h1>
 ```
 
-If your app dispatches through a **route table** instead (see
-[Routing](routing.md)), swap in `run_routes_middleware` — the same variadic
-middleware list, but your handler is a `RouteHandler` that receives the matched
-route's extracted path params:
+Routed apps compose the same way — the stages are a property of the App, the
+handler is a `RouteHandler`, and the route table is resolved after `before`:
 
 ```mojo
 def main() raises:
-    var app = App()
-    app.get("/hello/:name", "hello")
-    app.run_routes_middleware(
-        MyRouteHandler(),
-        SecurityHeaders(),
-        AccessLog("[req]"),
-        port=8080,
-    )
+    var app = App(middleware=Chain((SecurityHeaders(), AccessLog("[req]"))))
+    app.get("/hello/{name}", "hello")
+    app.run(MyRouteHandler(), port=8080)
 ```
 
-!!! note "Mojo-ism: `*mws: *Ms` is a typed variadic"
-    Both runners are declared like
-    `run_middleware[H: DispatchHandler, *Ms: Middleware](handler, *mws: *Ms)`.
-    The `*Ms: Middleware` says "any number of types, each conforming to `Middleware`,"
-    and the whole chain is monomorphized at compile time — no per-request vtable, no
-    stored function pointers. You never write the `[ ]` params yourself; Mojo infers
-    them from the stages you pass. Square-bracket compile-time params are covered in
-    the [primer](../mojo-primer.md).
+!!! note "Mojo-ism: `Chain[*Ms]` is a typed variadic"
+    `Chain` is declared `struct Chain[*Ms: Middleware]` and holds its stages in a
+    `Tuple[*Ms]`. The `*Ms: Middleware` says "any number of types, each conforming
+    to `Middleware`," and the whole pipeline is monomorphized at compile time — no
+    per-request vtable, no stored function pointers. You never write the `[ ]`
+    params yourself; Mojo infers them from the tuple you pass. Square-bracket
+    compile-time params are covered in the [primer](../mojo-primer.md).
 
 ## Order matters (and it's not a strict onion)
 
@@ -256,67 +241,45 @@ work. Put your cheapest rejections first.
     but if you're relying on reverse-unwind semantics, you won't get them. Keep your
     stages independent of each other's `after` ordering.
 
-## The stateful limit
+## Stateful stages
 
-You may have noticed there's no built-in rate limiter in the chain. That's
-deliberate, and it's the sharpest edge of the current design.
+Both hooks take `mut self`. The App owns its middleware as a field, so every
+stage is an lvalue and may mutate itself between `before` and `after`, and
+across requests. Two built-ins use it:
 
-A rate limiter has to remember hit counts *across* requests — it needs `mut self`.
-But the variadic chain dispatches over rvalues and can't call a mutating method on a
-stage. So **stateful middleware can't live in the chain today.** The workaround is
-the pre-middleware pattern: the *handler* owns the stateful struct as a field and
-mutates it through its own `mut self` on each call. Your handler is an lvalue; it can
-mutate. A middleware stage in the chain is not.
+- `RequestLogger` stamps `perf_counter_ns()` in `before` and logs the elapsed
+  milliseconds in `after`;
+- `RateLimitMW(cooldown_s, what)` keeps a `RateLimit` table keyed on `req.peer`
+  and answers the standard `429` (with `Retry-After`) from `before`.
 
 ```mojo
-@fieldwise_init
-struct GuardedApp(DispatchHandler, Copyable, Movable):
-    var limiter: RateLimit          # handler owns the state
+from baldr.middleware.chain import Chain, RateLimitMW, SecurityHeaders
 
-    def __call__(mut self, req: Request) raises -> Response:
-        if not self.limiter.allow(req.path):   # mutates via mut self — allowed
-            return Response.text("429 slow down\n", 429)
-        return Response.text("ok\n")
+var app = App(middleware=Chain((RateLimitMW(2, "requests"), SecurityHeaders())))
 ```
 
-Stateless concerns (headers, logging, auth gates that read a fixed secret) go in the
-chain; stateful concerns (rate limits, counters, per-key caches) stay inside the
-handler. A future Mojo with trait objects would collapse the two.
+A stage that does not need to mutate may still declare `self` on its hooks — the
+trait accepts both.
 
-## Which runner do I call?
+## One runner
 
-Here is the genuinely awkward part. baldr has **six** accept-loop entry points, and
-which one you call depends on the exact combination of features you want:
-
-| You want… | Call |
-| --- | --- |
-| a bare handler | `run` |
-| a handler + route table | `run_routes` |
-| a handler + middleware | `run_middleware` |
-| routes + middleware | `run_routes_middleware` |
-| routes + middleware + custom error page | `run_routes_middleware_eh` |
-| routes + middleware + errors + startup/shutdown hooks | `run_full` |
-
-!!! warning "This is a real rough edge"
-    Every feature combination is a differently-named method rather than something you
-    compose. Add middleware to a routed app and you rename `run_routes` to
-    `run_routes_middleware`; add a custom error handler and it's
-    `run_routes_middleware_eh`. It's honest to call this a combinatorial explosion —
-    it exists because Mojo 1.0 can't yet store the handler / middleware / error-handler
-    as composable trait objects, so each shape is spelled out as its own runner. The
-    [Handler guide](../guide/handler.md) has the full decision table and shows how
-    `run_full` subsumes the rest.
+`app.run(handler, port=...)` is the only accept loop. The features are decided by
+what you construct the App with — `middleware=`, `errors=`, `lifecycle=` — and by
+which trait your handler conforms to (`DispatchHandler` routes by hand,
+`RouteHandler` gets the route table). The [Handler guide](../guide/handler.md)
+walks the combinations. The v0.1 `run_middleware` / `run_routes_middleware`
+runners still compile, deprecated, until v0.2.
 
 ## Recap
 
-- A middleware stage is a struct conforming to `Middleware`, with `before(self, req)
-  -> Response` and `after(self, req, mut resp)` — both optional, both defaulted.
+- A middleware stage is a struct conforming to `Middleware`, with `before(mut self, req)
+  -> Response` and `after(mut self, req, mut resp)` — both optional, both defaulted.
 - `before` returns `MW_PASS` to continue or a real response to short-circuit;
   `after` mutates the response in place.
-- Compose with `app.run_middleware(handler, ...)` for a `DispatchHandler`, or
-  `app.run_routes_middleware(handler, ...)` for a `RouteHandler`.
-- Stages are `self`, not `mut self` — stateless only. Stateful concerns (rate
-  limiting) live in the handler.
+- Compose with `App(middleware=Chain((a, b, c)))`, then `app.run(handler)` — the
+  same for a `DispatchHandler` or a `RouteHandler`.
+- Stages are App fields and take `mut self`, so they may keep state; `RequestLogger`
+  times requests and `RateLimitMW` rate-limits per peer.
 - Order is front-to-back for *both* phases; it's not a reverse-unwind onion.
 
 Next we put routing, templates, JSON, and middleware together into one real

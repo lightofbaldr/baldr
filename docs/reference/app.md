@@ -1,11 +1,11 @@
 # App
 
 `App` is the server: a static-mount table, an optional route table, an optional
-asset mount, and a family of accept loops. You build one with `App()`, register
-what you need, then hand your handler to one of the `run_*` methods. The one you
-pick decides which features are wired in — routing, middleware, a custom error
-handler, lifecycle hooks — and the compiler monomorphizes the whole stack around
-your concrete types.
+asset mount, and the three optional parts of the request pipeline — middleware,
+an error handler, lifecycle hooks — carried as **type parameters** with defaults.
+`App()` is the bare server; pass a part to the constructor to add it, register
+what you need, then hand your handler to the one `run`. The compiler
+monomorphizes the whole stack around your concrete types.
 
 ```mojo
 from baldr.app import App, DispatchHandler
@@ -38,8 +38,8 @@ def main() raises:
 ## Traits
 
 A handler is a struct you conform to one of two traits. Which trait you use is
-determined by the runner: the plain `run` / `run_middleware` loops call a
-`DispatchHandler`; every route-aware loop (`run_routes` and up) calls a
+determined by what you hand to `run`: a `DispatchHandler` routes by hand and the
+route table is ignored; a `RouteHandler` gets the table resolved first and is called as a
 `RouteHandler`.
 
 ### `DispatchHandler`
@@ -72,7 +72,7 @@ trait RouteHandler(Movable, ImplicitlyDeletable):
     etc. stays the single source of truth. (Mojo 1.0 still has no storable
     function pointers, so this name-dispatch lives in the handler body rather
     than binding each route to its own callback — but the resolved name is now
-    threaded in for you.) See [`run_routes`](#run_routes) for the idiom.
+    threaded in for you.) See [`run`](#run) for the idiom.
 
 ---
 
@@ -98,22 +98,47 @@ struct StaticMount(Copyable, Movable):
 
 ## Constructor
 
-### `__init__`
-
 ```mojo
-def __init__(out self)
+struct App[
+    M: Middleware = NoMiddleware,
+    E: ErrorHandler = DefaultErrorHandler,
+    L: LifecycleHooks = NoLifecycle,
+](Movable)
+
+def __init__(out self)                                        # every part defaulted
+def __init__(out self, var middleware: M)
+def __init__(out self, var middleware: M, var errors: E)
+def __init__(out self, var middleware: M, var errors: E, var lifecycle: L)
+def __init__(out self, *, var errors: E)                      # keyword-only forms
+def __init__(out self, *, var lifecycle: L)
+def __init__(out self, *, var errors: E, var lifecycle: L)
+def __init__(out self, *, var middleware: M, var lifecycle: L)
 ```
 
-Builds an empty `App`: no static mounts, an empty route table, no asset mount.
-Takes no arguments — you configure it by calling the registration methods below.
+The parts are type parameters; you never spell them — the compiler infers `M`,
+`E` and `L` from the values you pass, and a part you leave out is
+default-constructed (`NoMiddleware`, `DefaultErrorHandler`, `NoLifecycle`; any
+built-in handler works as a default because they are all `Defaultable`).
 
-| Parameter | Type | Default | Notes |
+| Part | Trait | Default | What it does |
 |---|---|---|---|
-| *(none)* | | | `App()` is always the starting point. |
+| `middleware` | `Middleware` | `NoMiddleware` | One stage, or several as `Chain((a, b, c))`. Runs `before` the handler (may short-circuit) and `after` it. Stages are fields of the App, so they may keep state (`mut self`). |
+| `errors` | `ErrorHandler` | `DefaultErrorHandler` | Renders `400 Bad Request` for an unparseable request and `500 Internal Server Error` when the handler raises. `JsonErrorHandler` / `HtmlErrorHandler` are built in. |
+| `lifecycle` | `LifecycleHooks` | `NoLifecycle` | `on_startup()` once before the socket binds, `on_shutdown()` once after the loop exits. |
 
 ```mojo
-var app = App()
+var app = App()                                              # bare
+var api = App(errors=JsonErrorHandler())                     # JSON errors
+var site = App(
+    middleware=Chain((SecurityHeaders(), RequestLogger())),
+    errors=HtmlErrorHandler(),
+    lifecycle=MyHooks(),
+)
+var typed = App[E=JsonErrorHandler]()                        # a default-constructed part by type
 ```
+
+The parts are public fields (`app.middleware`, `app.errors`, `app.lifecycle`), so a
+test can read a stage's state after a request.
 
 ---
 
@@ -147,7 +172,7 @@ app.static("/static", "./public")
 def route(mut self, method: String, pattern: String, name: String)
 ```
 
-Register a route in the table consulted by the `run_routes*` loops. Sets an
+Register a route in the table `run()` / `handle()` resolve for a `RouteHandler`. Sets an
 internal `has_router` flag so the loop knows to resolve before dispatch. Patterns
 support `{param}` segments, e.g. `/users/{id}`.
 
@@ -219,7 +244,7 @@ app.assets(manifest^)
 
 ## Dispatch helpers
 
-The `run_*` loops call these internally in a fixed order (static → assets →
+`run()` / `handle()` call these internally in a fixed order (static → assets →
 routes/handler). They're public so you can compose your own loop, but note their
 **raise-to-fall-through** contract: a miss raises, and the caller catches it to
 try the next layer.
@@ -251,265 +276,86 @@ asset mount is registered or the path isn't a manifest URL.
 
 ---
 
-## Runners
-
-Every `run_*` method binds a socket on `host:port` and enters an accept loop that
-never returns under normal operation. They differ only in which features sit
-between the socket and your handler. Pick the smallest one that covers what you
-registered.
-
-| Method | Handler trait | Routes | Middleware | Error handler | Lifecycle |
-|---|---|---|---|---|---|
-| [`run`](#run) | `DispatchHandler` | — | — | — | — |
-| [`run_routes`](#run_routes) | `RouteHandler` | ✅ | — | — | — |
-| [`run_middleware`](#run_middleware) | `DispatchHandler` | — | ✅ | — | — |
-| [`run_routes_middleware`](#run_routes_middleware) | `RouteHandler` | ✅ | ✅ | — | — |
-| [`run_routes_middleware_eh`](#run_routes_middleware_eh) | `RouteHandler` | ✅ | ✅ | ✅ | — |
-| [`run_full`](#run_full) | `RouteHandler` | ✅ | ✅ | ✅ | ✅ |
-
-Common to all of them:
-
-- **Static mounts always win.** Every loop tries `dispatch_static` first, then
-  the asset mount, then routes/middleware/handler.
-- `host` defaults to `"0.0.0.0"`, `port` defaults to `8080`.
-- The `handler` (and `eh`, `lifecycle`) arguments are taken by ownership
-  (`var`) — pass them by value; transfer with `^` if you built them earlier.
-- Middleware is a **variadic type parameter** `*Ms: Middleware`, monomorphized at
-  compile time and iterated with `comptime for`. There is no per-request vtable.
-
-!!! note "Variadic `[*Ms: Middleware]` in one line"
-    `*Ms` is a compile-time-variadic list of types, each conforming to
-    `Middleware`; `*mws: *Ms` is the matching runtime pack. You just list your
-    middleware instances positionally and the compiler infers the pack. More on
-    compile-time parameters in [Mojo in 5 Minutes](../mojo-primer.md).
-
-### `run`
+## `run`
 
 ```mojo
-def run[H: DispatchHandler](
-    self,
-    var handler: H,
-    host: String = "0.0.0.0",
-    port: Int = 8080,
-) raises
+def run[H: RouteHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080) raises
+def run[H: DispatchHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080) raises
 ```
 
-The minimal loop. Per request: static → assets → `handler(req)`. No route table.
-Any exception in the loop renders a plain-text `500 <error>`.
+Binds a socket on `host:port` and serves forever. There is one runner; the
+overload is picked by your handler's trait:
+
+- a **`RouteHandler`** has the route table resolved first — a path match with the
+  wrong method returns `405` with an `Allow` header, an unmatched path returns
+  `404`, and on a match the handler receives `(req, params, name)`. With no routes
+  registered it is called with empty `Params()` and an empty `name`;
+- a **`DispatchHandler`** routes by hand: it is called as `handler(req)` and the
+  route table is ignored.
+
+Per request, in order: static mounts → asset mount → `middleware.before` (a
+non-`MW_PASS` response ends the request there; the handler and every `after`
+hook are skipped) → route table → handler → `middleware.after` → and if
+anything raised, `errors.render_error(500, "Internal Server Error", req)`. A
+request that does not parse gets `errors.render_error(400, "Bad Request", ...)`.
+`lifecycle.on_startup()` runs before the bind, `on_shutdown()` in a `finally`
+when the loop unwinds (e.g. Ctrl-C).
 
 | Parameter | Type | Default | Notes |
 |---|---|---|---|
-| `H` *(param)* | `DispatchHandler` | inferred | Your handler's type. |
-| `handler` | `H` (owned) | — | The dispatcher instance. |
+| `H` *(param)* | `RouteHandler` or `DispatchHandler` | inferred | Your handler's type. |
+| `handler` | `H` (owned) | — | Transferred in with `^` if you built it earlier. |
 | `host` | `String` | `"0.0.0.0"` | Bind address (informational in the log; the socket binds all interfaces). |
 | `port` | `Int` | `8080` | TCP port. |
 
 ```mojo
-App().run(Hello(), port=8080)
+var app = App(middleware=Chain((SecurityHeaders(), RequestLogger())), errors=JsonErrorHandler())
+app.get("/",           "home")
+app.get("/users/{id}", "user_detail")
+app.run(Api(), port=8080)
 ```
 
-### `run_routes`
+## `handle`
 
 ```mojo
-def run_routes[H: RouteHandler](
-    self,
-    var handler: H,
-    host: String = "0.0.0.0",
-    port: Int = 8080,
-) raises
+def handle[H: RouteHandler](mut self, mut handler: H, req: Request) raises -> Response
+def handle[H: DispatchHandler](mut self, mut handler: H, req: Request) raises -> Response
 ```
 
-Adds route-table dispatch. Per request: static → assets → resolve the route table
-→ `handler(req, params, name)`. A path match with the wrong method returns `405`
-with an `Allow` header; an unmatched path returns `404`. If no routes were
-registered, the handler is called with an empty `Params()` and an empty `name`.
-
-| Parameter | Type | Default | Notes |
-|---|---|---|---|
-| `H` *(param)* | `RouteHandler` | inferred | Route-aware handler type. |
-| `handler` | `H` (owned) | — | Receives `(req, params, name)`. |
-| `host` | `String` | `"0.0.0.0"` | Bind address. |
-| `port` | `Int` | `8080` | TCP port. |
+The same pipeline on one in-memory `Request`, no socket: mounts, middleware,
+route table, handler, error handler. This is how you test an app — build the
+request with `baldr.testing.get/post/...`, call `handle`, assert on the
+`Response`; the handler is borrowed `mut`, so you can inspect its state after.
 
 ```mojo
-from baldr.router import Params
+from baldr.testing import get
 
-@fieldwise_init
-struct Api(RouteHandler, Copyable, Movable):
-    def __call__(mut self, req: Request, params: Params, name: String) raises -> Response:
-        if name == "user_detail":
-            return Response.text("user " + params.get("id", "?"))
-        return Response.text("home\n")
-
-def main() raises:
-    var app = App()
-    app.get("/",           "home")
-    app.get("/users/{id}", "user_detail")
-    app.run_routes(Api())
+var app = App(middleware=Chain((Blocker(403), Counter(0, 0))))
+var h = Api()
+var resp = app.handle(h, get("/blocked"))
+# resp.status == 403, app.middleware.stages[1].befores == 0
 ```
 
-!!! note "Dispatch on `name`, not `req.path`"
-    The Router already resolved the request before your handler runs — `name` is
-    its matched route's name, so branching `if name == "user_detail":` keeps the
-    `app.get(...)` table you registered as the single source of truth. No
-    re-resolving, no holding a second `Router` copy. See the
-    [Router & Params reference](router.md) for `Params`.
+!!! warning "The accept loop is single-threaded and blocking"
+    `run` is one `accept → read → dispatch → write → close` loop on a single
+    thread. There is no keep-alive and no concurrency inside it — a slow handler
+    blocks the next request. Parallelism today comes from the prefork worker
+    pool (`baldr.concurrency`), which does not yet drive this pipeline; that is
+    the next item on the roadmap.
 
-### `run_middleware`
+## Deprecated runners
 
-```mojo
-def run_middleware[H: DispatchHandler, *Ms: Middleware](
-    self,
-    var handler: H,
-    *mws: *Ms,
-    host: String = "0.0.0.0",
-    port: Int = 8080,
-) raises
-```
+The six v0.1 runners still compile and behave as they did; each is `run` with
+the parts passed as arguments instead of carried by the App. They ignore the
+App's own `middleware` / `errors` / `lifecycle` and will be removed at v0.2.
 
-A `DispatchHandler` wrapped in a middleware pipeline — no route table. Per
-request: static → assets → each middleware's `before` (short-circuit if it
-returns a non-`MW_PASS` status, e.g. `429`) → `handler(req)` → each middleware's
-`after` (mutates the response in place). Middleware runs in the order you pass it.
-
-| Parameter | Type | Default | Notes |
-|---|---|---|---|
-| `H` *(param)* | `DispatchHandler` | inferred | Handler type. |
-| `*Ms` *(param)* | `Middleware` (variadic) | inferred | Middleware types. |
-| `handler` | `H` (owned) | — | The dispatcher. |
-| `*mws` | `*Ms` (owned) | — | Middleware instances, positional. |
-| `host` | `String` | `"0.0.0.0"` | Bind address. |
-| `port` | `Int` | `8080` | TCP port. |
-
-```mojo
-from baldr.middleware.chain import SecurityHeaders, RequestLogger
-
-app.run_middleware(
-    Hello(),
-    SecurityHeaders(),
-    RequestLogger(),
-)
-```
-
-### `run_routes_middleware`
-
-```mojo
-def run_routes_middleware[H: RouteHandler, *Ms: Middleware](
-    self,
-    var handler: H,
-    *mws: *Ms,
-    host: String = "0.0.0.0",
-    port: Int = 8080,
-) raises
-```
-
-Routes **and** middleware. Per request: static → assets → middleware `before`
-(short-circuit) → route table (405+`Allow` / 404 on miss) → `handler(req, params, name)`
-→ middleware `after`. Loop exceptions render a plain-text `500`.
-
-| Parameter | Type | Default | Notes |
-|---|---|---|---|
-| `H` *(param)* | `RouteHandler` | inferred | Route-aware handler. |
-| `*Ms` *(param)* | `Middleware` (variadic) | inferred | Middleware types. |
-| `handler` | `H` (owned) | — | Receives `(req, params, name)`. |
-| `*mws` | `*Ms` (owned) | — | Middleware instances, positional. |
-| `host` | `String` | `"0.0.0.0"` | Bind address. |
-| `port` | `Int` | `8080` | TCP port. |
-
-### `run_routes_middleware_eh`
-
-```mojo
-def run_routes_middleware_eh[H: RouteHandler, *Ms: Middleware, E: ErrorHandler](
-    self,
-    var handler: H,
-    var eh: E,
-    *mws: *Ms,
-    host: String = "0.0.0.0",
-    port: Int = 8080,
-) raises
-```
-
-Same request path as `run_routes_middleware`, but any exception is rendered via
-`eh.render_error(500, message, req)` instead of the plain-text fallback. Use
-`JsonErrorHandler()` for API apps or `HtmlErrorHandler()` for browser apps (see
-[Config & Error Handling](../guide/config-errors.md)), or conform your own struct
-to `ErrorHandler`. A request that fails to even parse returns a plain
-`400 bad request`.
-
-| Parameter | Type | Default | Notes |
-|---|---|---|---|
-| `H` *(param)* | `RouteHandler` | inferred | Route-aware handler. |
-| `*Ms` *(param)* | `Middleware` (variadic) | inferred | Middleware types. |
-| `E` *(param)* | `ErrorHandler` | inferred | Error-handler type. |
-| `handler` | `H` (owned) | — | Receives `(req, params, name)`. |
-| `eh` | `E` (owned) | — | Renders `500`s. Note: `eh` comes **before** `*mws`. |
-| `*mws` | `*Ms` (owned) | — | Middleware instances, positional. |
-| `host` | `String` | `"0.0.0.0"` | Bind address. |
-| `port` | `Int` | `8080` | TCP port. |
-
-```mojo
-from baldr.errors import JsonErrorHandler
-
-app.run_routes_middleware_eh(
-    Api(),
-    JsonErrorHandler(),
-    SecurityHeaders(),
-)
-```
-
-!!! note "Argument order: `eh` before the middleware pack"
-    Because a variadic `*mws` has to come last among the positional runtime
-    arguments, `eh` sits **between** `handler` and `*mws`. Read the signature
-    literally: handler, then error handler, then all your middleware.
-
-### `run_full`
-
-```mojo
-def run_full[H: RouteHandler, *Ms: Middleware, E: ErrorHandler, L: LifecycleHooks](
-    self,
-    var handler: H,
-    var eh: E,
-    var lifecycle: L,
-    *mws: *Ms,
-    host: String = "0.0.0.0",
-    port: Int = 8080,
-) raises
-```
-
-The capstone: routes + middleware + error handler + lifecycle hooks.
-`lifecycle.on_startup()` runs once before the socket binds; `lifecycle.on_shutdown()`
-runs in a `finally` when the loop unwinds (e.g. Ctrl-C). The per-request path is
-identical to `run_routes_middleware_eh`.
-
-| Parameter | Type | Default | Notes |
-|---|---|---|---|
-| `H` *(param)* | `RouteHandler` | inferred | Route-aware handler. |
-| `*Ms` *(param)* | `Middleware` (variadic) | inferred | Middleware types. |
-| `E` *(param)* | `ErrorHandler` | inferred | Error-handler type. |
-| `L` *(param)* | `LifecycleHooks` | inferred | Lifecycle-hooks type. |
-| `handler` | `H` (owned) | — | Receives `(req, params, name)`. |
-| `eh` | `E` (owned) | — | Renders `500`s. |
-| `lifecycle` | `L` (owned) | — | `on_startup` / `on_shutdown` hooks. |
-| `*mws` | `*Ms` (owned) | — | Middleware instances, positional. |
-| `host` | `String` | `"0.0.0.0"` | Bind address. |
-| `port` | `Int` | `8080` | TCP port. |
-
-```mojo
-app.run_full(
-    Api(),
-    JsonErrorHandler(),
-    MyLifecycle(),
-    SecurityHeaders(),
-    RequestLogger(),
-)
-```
-
-!!! warning "The accept loops are single-threaded and blocking"
-    Every `run_*` method is one `accept → read → dispatch → write → close` loop
-    on a single thread. There's no keep-alive and no concurrency inside a single
-    runner — a slow handler blocks the next request. Parallelism today comes from
-    the prefork worker pool (a separate primitive), not from these loops. This is
-    pre-alpha; treat the runners as the correctness-first baseline they are.
+| Deprecated | Write instead |
+|---|---|
+| `run_routes(h)` | `run(h)` |
+| `run_middleware(h, a, b)` | `App(middleware=Chain((a, b))).run(h)` |
+| `run_routes_middleware(h, a, b)` | `App(middleware=Chain((a, b))).run(h)` |
+| `run_routes_middleware_eh(h, eh, a, b)` | `App(middleware=Chain((a, b)), errors=eh).run(h)` |
+| `run_full(h, eh, hooks, a, b)` | `App(middleware=Chain((a, b)), errors=eh, lifecycle=hooks).run(h)` |
 
 ---
 

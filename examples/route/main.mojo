@@ -1,6 +1,6 @@
 """Phase 2.1 — routing example.
 
-Demonstrates App.run_routes with a RouteHandler: dispatch by the matched
+Demonstrates App.run with a RouteHandler: dispatch by the matched
 route NAME, path params, 405, 404.
 Run: pixi run example-route && build/example-route   (listens on :8095)
 """
@@ -37,4 +37,4 @@ def main() raises:
     app.post("/notes", "note_create")
     app.delete("/notes/{id}", "note_delete")
 
-    app.run_routes(NotesApp("baldr"), port=8095)
+    app.run(NotesApp("baldr"), port=8095)

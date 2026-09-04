@@ -5,13 +5,11 @@ Phase 2.7 — error handling. Replaces the inline
 configurable `ErrorHandler` trait. Built-in `JsonErrorHandler` (API apps) and
 `HtmlErrorHandler` (browser apps).
 
-Because Mojo 1.0 can't store a heterogeneous trait object in `Optional`, the
-`App` holds no error-handler field; instead each `run*` method is generic over
-an optional `ErrorHandler` type, defaulting to `JsonErrorHandler` via a
-`NoErrorHandler`-style sentinel is avoided in favor of an explicit default
-instance threaded through `run_with_error_handler[E]`. The plain `run*` methods
-keep their simple inline 500 behavior; apps that want a custom error shape use
-`run_routes_middleware_eh[H, *Ms, E]`.
+The `App` owns its error handler as a typed field (`App[E: ErrorHandler =
+DefaultErrorHandler]`): `App()` renders plain text, `App(errors=JsonErrorHandler())`
+renders JSON, and the type is fixed at compile time — no trait objects needed.
+The deprecated `run_routes_middleware_eh` / `run_full` runners still accept an
+error handler as an argument.
 """
 
 from .request import Request
@@ -25,7 +23,21 @@ trait ErrorHandler(Movable, Deinitable):
 
 
 @fieldwise_init
-struct JsonErrorHandler(ErrorHandler, Copyable, Movable):
+struct DefaultErrorHandler(ErrorHandler, Defaultable, Copyable, Movable):
+    """`App()`'s default: the plain-text errors the bare accept loop always
+    produced — `400 Bad Request` for an unparseable request, `500 Internal
+    Server Error` when a handler raises."""
+    var _unused: Int
+
+    def __init__(out self):
+        self._unused = 0
+
+    def render_error(self, status: Int, message: String, req: Request) raises -> Response:
+        return Response.text(String(status) + String(" ") + message + String("\n"), status)
+
+
+@fieldwise_init
+struct JsonErrorHandler(ErrorHandler, Defaultable, Copyable, Movable):
     """Default for API apps. Returns `{"error": <label>, "message": ..., "status": <code>}`."""
     var _unused: Int
 
@@ -41,7 +53,7 @@ struct JsonErrorHandler(ErrorHandler, Copyable, Movable):
 
 
 @fieldwise_init
-struct HtmlErrorHandler(ErrorHandler, Copyable, Movable):
+struct HtmlErrorHandler(ErrorHandler, Defaultable, Copyable, Movable):
     """Renders a minimal HTML error page. Apps wanting a templated page can
     conform their own struct to `ErrorHandler` and call `Templates.render`."""
     var _unused: Int

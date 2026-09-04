@@ -234,7 +234,7 @@ For a literal segment `value` is the text to match; for a param segment `value` 
 
 ## In an app
 
-End to end, with `App.run_routes` doing the resolve for you — the router matches, extracts, and hands your `RouteHandler` `(req, params, name)`:
+End to end, with `App.run` doing the resolve for you — the router matches, extracts, and hands your `RouteHandler` `(req, params, name)`:
 
 ```mojo
 from baldr.app import App, RouteHandler
@@ -261,7 +261,7 @@ def main() raises:
     app.get("/notes/{id}", "note_show")
     app.post("/notes", "note_create")
     app.delete("/notes/{id}", "note_delete")
-    app.run_routes(NotesApp("baldr"), port=8095)
+    app.run(NotesApp("baldr"), port=8095)
 ```
 
-See **[App & Handlers](./app.md)** for `run_routes` and the middleware/lifecycle variants, and **[Request & Response](./request-response.md)** for the objects your handler works with.
+See **[App & Handlers](./app.md)** for `run` and the App's middleware / error / lifecycle parts, and **[Request & Response](./request-response.md)** for the objects your handler works with.
