@@ -92,6 +92,16 @@ app.get("/notes/{id}", "note_show")
 
 Patterns match segment by segment. `/notes/{id}` matches `/notes/42` (binding `id = "42"`) and `/notes/hello`, but **not** `/notes` (too few segments) or `/notes/42/edit` (too many). A trailing slash on the request path is tolerated.
 
+### Typed params
+
+Use `{id:int}` when a route segment must be an integer:
+
+```mojo
+app.get("/notes/{id:int}", "note_show")
+```
+
+It matches decimal digits with an optional leading sign (`42`, `-7`, `+9`). Text, decimal points, a sign without digits, and an empty segment do not match. A rejected segment therefore becomes a normal `404`, or falls through to a later route such as `/notes/{slug}`. Once matched, `params.get_int("id")` is safe for the typed segment. For untyped parameters, `params.get_int_or("page", 1)` returns the default when the value is absent or not numeric.
+
 ## Serving a routed app
 
 A routed app serves with the same `run` as everything else — the handler's trait
@@ -144,7 +154,8 @@ So do you still need the `404` line at the bottom of `__call__`? **Yes** — as 
 - Declare routes on the `App`: `app.get/post/put/delete/patch(pattern, name)` — bare string literals, no `String(...)` wrap needed. `{id}` in a pattern is a named param.
 - Serve with `app.run(handler, port=...)`; for a `RouteHandler` it resolves the table, then calls your handler on a match.
 - Your handler conforms to **`RouteHandler`**: `def __call__(mut self, req: Request, params: Params, name: String) raises -> Response`.
-- Read params with `params.get(key, default)`, `params.get_int(key, default)` (raises on non-numeric), `params.has(key)`, `params.is_empty()`, `len(params)`.
+- Read params with `params.get(key, default)`, `params.get_int(key, default)` (raises on non-numeric), or non-raising `params.get_int_or(key, default)`.
+- Use `{id:int}` to reject non-integer segments during route matching; untyped `{id}` keeps accepting any one segment.
 - baldr answers **404** and **405** (with `Allow`) at the table level, before your handler runs.
 - **Dispatch by name:** the router resolves the matched route's `name` and passes it straight to your handler, so `if name == "note_show":` branches match the same table you registered — one source of truth, no drift. Keep the trailing `404` return as a safety net.
 

@@ -3,6 +3,23 @@
 All versions are `0.1.0-alpha.*` until the v0.1 release.
 Newest entries first.
 
+## P1 request, route, and template correctness (2026-09-04)
+
+- `Templates` now resolves relative directories from `BALDR_TEMPLATE_DIR`,
+  the executable directory, its parent, then CWD; absolute paths stay
+  untouched and `root` exposes the resolved directory.
+- `validate()` parses once and returns the parsed body as
+  `ValidationResult.value`, removing the old validate-then-`json()` double
+  parse while preserving immutable handler requests and the existing `.ok` /
+  `.to_response()` validation contract.
+- Route patterns accept `{id:int}` for optional-sign decimal segments, so bad
+  numeric input does not dispatch to the typed route. `Params.get_int_or`
+  adds a non-raising fallback for untyped values.
+- Three focused suites cover relocated-binary template resolution, retained
+  validation JSON, typed route fallback, and method-aware `Allow` behavior.
+- The full `examples` aggregate is part of `pixi run test`, so public handler
+  API breakage is caught alongside unit suites.
+
 ## One `run`: the App carries its parts (2026-09-04)
 
 - **`ServerConfig` is consumed.** `App.configure(cfg)` and `app.run(handler,

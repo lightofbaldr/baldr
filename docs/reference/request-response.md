@@ -20,10 +20,10 @@ The parsed HTTP request. Fields are public — read them directly:
 |---|---|---|
 | `header` | `header(self, name) -> String` | one header value (empty if absent) |
 | `form` | `form(self) raises -> Dict[String, String]` | parsed `application/x-www-form-urlencoded` body |
-| `json` | `json(self) raises -> JsonValue` | parsed JSON body — see [JSON](json.md) |
+| `json` | `json(self) raises -> JsonValue` | parse the current JSON body — see [JSON](json.md) |
 | `cookies` | `cookies(self) -> Dict[String, String]` | all request cookies |
 | `cookie` | `cookie(self, name, default=String()) -> String` | one cookie value |
-| `validate` | `validate(self, *validators) raises -> ValidationResult` | run validators over the JSON body |
+| `validate` | `validate(self, *validators) raises -> ValidationResult` | parse the JSON body once, validate it, and expose it as `result.value` |
 
 ```mojo
 def __call__(mut self, req: Request) raises -> Response:
@@ -34,6 +34,8 @@ def __call__(mut self, req: Request) raises -> Response:
         ...
     return Response.text("ok\n")
 ```
+
+Validation keeps its existing non-raising field-error contract (`result.ok`, `result.to_response()`); malformed JSON still raises. On success—or a parsed body that fails field validation—`result.value` is the parsed `JsonValue`, so handlers do not need a second `json()` call. A direct `json()` call parses the request's current body and works on the immutable `Request` binding passed to handlers.
 
 ## `Response`
 

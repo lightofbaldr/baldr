@@ -61,7 +61,7 @@ struct Request(Copyable, Movable):
         return _parse_form(self.body)
 
     def json(self) raises -> JsonValue:
-        """Parse the request body as JSON. Raises on malformed."""
+        """Parse the current request body as JSON. Raises on malformed JSON."""
         return json_parse(self.body)
 
     def cookies(self) -> Dict[String, String]:
@@ -78,12 +78,13 @@ struct Request(Copyable, Movable):
         return default
 
     def validate[*Vs: Validator](self, *validators: *Vs) raises -> ValidationResult:
-        """Parse the body as JSON and run a comptime chain of validators.
+        """Parse the body JSON and run a comptime chain of validators.
 
         Usage:
             var result = req.validate(Required("name"), StringLength("name", 1, 100))
             if not result.ok:
                 return result.to_response()
+            var value = result.value
         """
         var value = json_parse(self.body)
         return validate_json(value, *validators)

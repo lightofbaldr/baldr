@@ -85,9 +85,9 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
   a header block over 64 KiB); `tests/test_app_config.mojo`.
 - ~~**`app.assets(url_prefix=...)` silently ignores `url_prefix`**~~ ✅ **SHIPPED 2026-09-04.** Only paths
   under the mount prefix (segment boundary) are considered; a manifest URL mounted elsewhere falls through.
-- **Templates load relative to CWD, not the binary** — running the "one static binary" from anywhere
-  but the project root raises `template not found`. Breaks the core promise. Resolve relative to the
-  executable, or compile templates in. `templates.mojo`:58-68.
+- ~~**Templates load relative to CWD, not the binary.**~~ ✅ **SHIPPED 2026-09-04.** Relative
+  template directories resolve from `BALDR_TEMPLATE_DIR`, beside the executable, one directory
+  above it, then CWD; `Templates.root` exposes the selected path. Absolute paths remain unchanged.
 - **No TLS / HTTP2** — plaintext HTTP/1.1 only; a reverse proxy (Caddy/nginx) is mandatory, and there
   is zero `X-Forwarded-*`/PROXY-protocol trust handling. Documented; decide if minimal TLS belongs
   in-tree. `app.mojo` accept loop.
@@ -95,12 +95,12 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
   respawned with bounded backoff; SIGTERM/SIGINT drain active connections, reap the pool, run the
   parent lifecycle shutdown hook, and return normally. Five respawns inside 10 seconds terminate a
   crash loop instead of spinning.
-- **Body double-parse.** `req.validate()` parses the JSON body then discards it; the handler calls
-  `req.json()` and parses the same body again. Have `validate` return the parsed `JsonValue`.
-  `request.mojo`:73-82 & 56-58.
-- **`{id}` type errors become 500s.** `params.get_int` raises on a present-but-non-numeric segment
-  (`/notes/banana` → 500, not 404), because the pattern matches any segment. Add typed params
-  (`{id:int}` fails the match → 404) or a non-raising `get_int_or`. `router.mojo`:41-56, 103-123.
+- ~~**Body double-parse.**~~ ✅ **SHIPPED 2026-09-04.** `validate()` parses once and
+  `ValidationResult.value` exposes that parsed body without a second `json()` call or a breaking
+  change to immutable handler requests, `.ok`, or `.to_response()`.
+- ~~**`{id}` type errors become 500s.**~~ ✅ **SHIPPED 2026-09-04.** `{id:int}` rejects invalid
+  integer segments during matching (404 or later-route fallback); `get_int_or` supplies a
+  non-raising read for untyped params.
 
 ---
 

@@ -7,7 +7,7 @@ that produces structured 422 responses. The shapes follow the design-patterns
 research:
 
   - `FieldError(field, code, message)` — one problem on one field.
-  - `ValidationResult(errors, ok)` with `to_response()` -> 422 JSON
+  - `ValidationResult(errors, ok, value)` with `to_response()` -> 422 JSON
     `{"ok":false,"errors":[...]}`.
   - `Validator` trait: `validate(self, value) -> ValidationResult`. Non-mut
     `self` so it composes through the comptime-variadic `validate[*Vs]`
@@ -22,6 +22,7 @@ the body as JSON and runs the validators. Usage:
     var result = req.validate(Required("name"), StringLength("name", 1, 100))
     if not result.ok:
         return result.to_response()
+    var data = result.value
 """
 
 from std.collections import List
@@ -45,10 +46,12 @@ struct FieldError(Copyable, Movable):
 struct ValidationResult(Copyable, Movable, Sized):
     var errors: List[FieldError]
     var ok: Bool
+    var value: JsonValue
 
     def __init__(out self):
         self.errors = List[FieldError]()
         self.ok = True
+        self.value = JsonValue()
 
     def __len__(self) -> Int:
         return len(self.errors)
@@ -90,8 +93,9 @@ trait Validator(Movable, Deinitable):
 
 
 def validate_json[*Vs: Validator](value: JsonValue, *validators: *Vs) raises -> ValidationResult:
-    """Run a comptime chain of validators over `value`, merging errors."""
+    """Run validators over `value`; the result retains the parsed value."""
     var result = ValidationResult()
+    result.value = value.copy()
     comptime for i in range(len(Vs)):
         var r = validators[i].validate(value)
         result.merge(r^)

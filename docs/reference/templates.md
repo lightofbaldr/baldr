@@ -65,9 +65,12 @@ struct Templates(Copyable, Movable, TemplateLoader):
 
 | Member | Signature | Notes |
 |---|---|---|
-| `__init__` | `__init__(out self, directory: String, reload: Bool = False)` | `directory` is a path prefix; a trailing `/` is added if missing. |
-| `render` | `render(mut self, name: String, ctx: Value) raises -> String` | Load `directory/name`, parse on first use, render with `ctx`. |
-| `load` | `load(self, name: String) raises -> String` | `TemplateLoader` conformance — reads `directory/name` as a string. Raises if the file is missing. |
+| `__init__` | `__init__(out self, directory: String, reload: Bool = False)` | Resolve the directory as described below. |
+| `root` | `var root: String` | The resolved directory used for loads and includes. |
+| `render` | `render(mut self, name: String, ctx: Value) raises -> String` | Load `root/name`, parse on first use, render with `ctx`. |
+| `load` | `load(self, name: String) raises -> String` | `TemplateLoader` conformance — reads `root/name` as a string. Raises if the file is missing. |
+
+An absolute `directory` is used unchanged. A relative directory resolves in this order: an explicit `BALDR_TEMPLATE_DIR`, beside the running executable, one directory above the executable, then the current working directory. This lets `build/app` find a sibling project `templates/` directory even when the process starts elsewhere. Print `templates.root` when diagnosing deployment layout.
 
 `render` is `mut self` because the first render of a given name parses the file and appends the result to an internal cache; later renders of the same name reuse the parsed AST. That mutation-between-calls is exactly why a baldr handler holds its `Templates` as a struct field.
 
@@ -326,7 +329,7 @@ Inside the loop body a `loop` dict is available:
 
 ### `{% include "name" %}`
 
-Splices another template in place, resolved through the active loader (the file `directory/name` when you're rendering via `Templates`):
+Splices another template in place, resolved through the active loader (the file `root/name` when you're rendering via `Templates`):
 
 ```html
 <body>

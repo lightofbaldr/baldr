@@ -3,8 +3,8 @@
 Phase 2.1 — routing + params. A `Router` holds route entries
 (method + pattern + name) as pure data and resolves an incoming
 (method, path) to a `Match` carrying extracted path params, with
-405-awareness. Route patterns support `{param}` segments, e.g.
-`/users/{id}/posts/{pid}`.
+405-awareness. Route patterns support `{param}` string segments and
+`{param:int}` signed-decimal segments, e.g. `/users/{id:int}`.
 
 Mojo 1.0 cannot store a heterogeneous list of `def`-typed handlers, so
 the Router resolves to a route *name* + `Params`; `App.run_routes`
@@ -50,10 +50,19 @@ struct Params(Copyable, Movable, Sized):
                 break
         if not found:
             return default
+        if not _is_decimal_int(raw):
+            raise Error(String("baldr: param '") + key + "' is not an Int: '" + raw + "'")
         try:
             return atol(raw)
         except:
             raise Error(String("baldr: param '") + key + "' is not an Int: '" + raw + "'")
+
+    def get_int_or(self, key: String, default: Int) -> Int:
+        """Parse a param as Int, returning `default` when absent or invalid."""
+        try:
+            return self.get_int(key, default)
+        except:
+            return default
 
     def is_empty(self) -> Bool:
         return len(self.data) == 0
@@ -65,11 +74,31 @@ struct Params(Copyable, Movable, Sized):
 # ── Route pattern segments ────────────────────────────────────────────────
 comptime SEG_LITERAL = 0
 comptime SEG_PARAM = 1
+comptime SEG_PARAM_INT = 2
+
+
+def _is_decimal_int(value: String) -> Bool:
+    """True for one-or-more decimal digits with an optional leading sign."""
+    var bytes = value.as_bytes()
+    if len(bytes) == 0:
+        return False
+    var start = 0
+    if bytes[0] == UInt8(43) or bytes[0] == UInt8(45):  # '+' / '-'
+        start = 1
+    if start == len(bytes):
+        return False
+    for i in range(start, len(bytes)):
+        if bytes[i] < UInt8(48) or bytes[i] > UInt8(57):
+            return False
+    return True
 
 
 struct Segment(Copyable, Movable):
-    """One segment of a route pattern. `kind` is SEG_LITERAL or SEG_PARAM;
-    `value` is the literal text or the param name."""
+    """One segment of a route pattern.
+
+    `kind` is SEG_LITERAL, SEG_PARAM, or SEG_PARAM_INT; `value` is the
+    literal text or the param name.
+    """
     var kind: Int
     var value: String
 
@@ -96,7 +125,13 @@ struct RoutePattern(Copyable, Movable):
                 continue
             if ps[byte=0:1] == "{" and ps[byte=ps.byte_length() - 1:ps.byte_length()] == "}":
                 var name = String(ps[byte=1:ps.byte_length() - 1])
-                self.segments.append(Segment(SEG_PARAM, name))
+                var kind = SEG_PARAM
+                var colon = name.rfind(String(":"))
+                if colon > 0 and String(name[byte=colon + 1:]) == "int":
+                    var typed_name = String(name[byte=0:colon])
+                    name = typed_name^
+                    kind = SEG_PARAM_INT
+                self.segments.append(Segment(kind, name))
             else:
                 self.segments.append(Segment(SEG_LITERAL, ps))
 
@@ -116,6 +151,10 @@ struct RoutePattern(Copyable, Movable):
             ref seg = self.segments[i]
             var pv = path_segs[i]
             if seg.kind == SEG_PARAM:
+                params.data[seg.value] = pv
+            elif seg.kind == SEG_PARAM_INT:
+                if not _is_decimal_int(pv):
+                    return Optional[Params](None)
                 params.data[seg.value] = pv
             else:
                 if seg.value != pv:

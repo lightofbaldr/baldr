@@ -78,6 +78,7 @@ struct Params(Copyable, Movable, Sized):
 | `has` | `has(self, key: String) -> Bool` | Is the key present? |
 | `get` | `get(self, key: String, default: String = String()) -> String` | Value, or `default` if absent. |
 | `get_int` | `get_int(self, key: String, default: Int = 0) raises -> Int` | Parsed `Int`. `default` if absent; **raises** if present but non-numeric. |
+| `get_int_or` | `get_int_or(self, key: String, default: Int) -> Int` | Parsed `Int`, or `default` if absent or non-numeric. Never raises. |
 | `is_empty` | `is_empty(self) -> Bool` | True when no params. |
 | `__len__` | `__len__(self) -> Int` | Number of params (enables `len(params)`). |
 
@@ -103,11 +104,13 @@ def read(params: Params) raises -> String:
     return "id=" + id
 ```
 
-!!! warning "`get_int` raises on bad input — catch it"
+!!! warning "`get_int` raises on bad untyped input — constrain or catch it"
     `get_int` calls `atol` under the hood. A missing key returns the `default`, but a key that's *present and non-numeric* (`/notes/abc` against `/notes/{id}`) raises `Error("baldr: param 'id' is not an Int: 'abc'")`. Because it can throw, `get_int` is a `raises` function — your handler is already `raises`, so a bare call is fine, but wrap it in `try/except` if you want to return a clean 400 instead of a 500.
 
-!!! note "Values are always `String`"
-    baldr does no typed path converters (no `<int:id>` like some frameworks). Every captured segment lands as a `String`; `get_int` is the one built-in coercion. Convert other types yourself from `get`.
+Prefer `/notes/{id:int}` when non-numeric input should not match the route at all. Use `get_int_or` when an untyped or optional value should quietly fall back.
+
+!!! note "Captured values remain `String`"
+    `{id:int}` constrains matching but stores the original segment text. `get_int` and `get_int_or` perform conversion at read time. Convert other types yourself from `get`.
 
 ---
 
@@ -132,8 +135,9 @@ struct RoutePattern(Copyable, Movable):
 |---|---|
 | `notes` | Literal — must match that path segment exactly. |
 | `{id}` | Param — captures the segment into `Params` under the name `id`. |
+| `{id:int}` | Integer param — captures only optional-sign decimal integers. |
 
-A pattern is split on `/`; empty segments (leading/trailing slashes) are dropped, so a trailing slash on the request path is tolerated. Matching is **exact on segment count** — `/notes/{id}` matches `/notes/42` but not `/notes` or `/notes/42/comments`.
+A pattern is split on `/`; empty segments (leading/trailing slashes) are dropped, so a trailing slash on the request path is tolerated. Matching is **exact on segment count** — `/notes/{id}` matches `/notes/42` but not `/notes` or `/notes/42/comments`. `{id:int}` accepts `42`, `-7`, and `+9`; it rejects `banana`, `4.2`, whitespace, a bare sign, and an empty segment.
 
 !!! warning "One-segment params only — no wildcards or regex"
     A `{name}` captures exactly one path segment. There's no `{path:rest}` catch-all, no regex constraints, and no optional segments. Nested paths need one param per level: `/users/{uid}/posts/{pid}`. This is genuinely limited today — a rough edge we're tracking.
@@ -218,14 +222,14 @@ The atom of a `RoutePattern`. You'll only see it if you inspect `RoutePattern.se
 
 ```mojo
 struct Segment(Copyable, Movable):
-    var kind: Int      # SEG_LITERAL (0) or SEG_PARAM (1)
+    var kind: Int      # SEG_LITERAL (0), SEG_PARAM (1), or SEG_PARAM_INT (2)
     var value: String  # literal text, or the param name
 ```
 
 | Member | Signature | Notes |
 |---|---|---|
 | `__init__` | `__init__(out self, kind: Int, value: String)` | Build a segment. |
-| `kind` | `var kind: Int` | `SEG_LITERAL` or `SEG_PARAM` (module `comptime` constants). |
+| `kind` | `var kind: Int` | `SEG_LITERAL`, `SEG_PARAM`, or `SEG_PARAM_INT` (module `comptime` constants). |
 | `value` | `var value: String` | For a param, `value` is the *name* (`id`), not the matched text. |
 
 For a literal segment `value` is the text to match; for a param segment `value` is the capture name. You almost never construct these by hand — `RoutePattern.__init__` parses them from the pattern string.

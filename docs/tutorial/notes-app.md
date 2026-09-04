@@ -17,7 +17,7 @@ We'll build it top to bottom. Every symbol below is a real baldr API — if you 
 | Method | Path | Does |
 |---|---|---|
 | `GET` | `/` | list all notes (HTML, rendered from a template) |
-| `GET` | `/notes/{id}` | show one note |
+| `GET` | `/notes/{id:int}` | show one note |
 | `POST` | `/notes` | create a note from a JSON body, validated |
 
 The whole thing is **one struct** that holds a `List[Note]` as a field. That list *is* the database. It lives on the handler between requests — no globals, no external store. That's the load-bearing idea from [First Steps](first-steps.md#step-1-the-handler-is-a-struct), now doing real work.
@@ -155,7 +155,7 @@ The template lives in `templates/index.html`. Note the `{% for %}` loop and the 
         return Response.text("404 no such note\n", 404)
 ```
 
-`params.get_int` parses the `{id}` segment as an `Int`. It returns a default (`0`) if the param is absent, and **raises** if the param is present but not a number — so a request for `/notes/abc` throws. Right now that surfaces as a `500`; ideally it'd be a `404`. We flag it below.
+`params.get_int` parses the `{id:int}` segment as an `Int`. The typed route only matches optional-sign decimal integers, so `/notes/abc` never reaches this handler: it resolves as a `404` (or falls through to a later matching route). For an untyped `{id}`, `get_int` still raises on invalid text; use `get_int_or` when a default is more appropriate.
 
 The `templates/note.html` is tiny:
 
@@ -184,7 +184,7 @@ This is where it gets interesting. `POST /notes` takes a JSON body. Before we tr
         if not result.ok:
             return result.to_response()
 
-        var data = req.json()
+        var data = result.value
         var title = data.get("title").string_val
         var body = data.get("body").string_val
 
@@ -202,19 +202,20 @@ Walk through what each API does:
 
 | Call | What it does |
 |---|---|
-| `req.validate(*validators)` | parses the body as JSON, runs the validators, returns a `ValidationResult` |
+| `req.validate(*validators)` | parses the body JSON once, runs the validators, returns a `ValidationResult` carrying the parsed `value` |
 | `Required("title")` | fails if `title` is absent or `null` |
 | `StringLength("title", 1, 100)` | fails if `title`'s string is outside 1–100 bytes (skips if absent — pair it with `Required`) |
 | `result.ok` | `True` only if every validator passed |
 | `result.to_response()` | renders a `422` with body `{"ok":false,"errors":[...]}` |
-| `req.json()` | parses the body into a `JsonValue` tree |
+| `result.value` | the already-parsed `JsonValue` tree |
+| `req.json()` | parses the current body directly when validation is not needed |
 | `data.get(...).string_val` | reads a field's string value out of the parsed object |
 | `Response.json(value, 201)` | serializes a `JsonValue` and sets `Content-Type: application/json` |
 
 The validators are just structs conforming to a `Validator` trait, run through a compile-time chain — you can drop in `FieldType("body", "string")` the same way, or write your own. `Required`, `StringLength`, and `FieldType` are the built-in set in `baldr.validation`.
 
-!!! warning "`validate` and `json` both parse the body"
-    `req.validate(...)` parses the JSON internally to check it, then throws that parse away; `req.json()` parses it a second time. For a small note body that's fine, but it's wasteful, and there's no way today to get the already-parsed value back out of `validate`. Noted on the punch-list below.
+!!! note "Validation returns the parse it used"
+    `req.validate(...)` parses the body once and exposes that tree as `result.value`. Read the value from the result instead of calling `req.json()` afterward; that is what removes the old double parse while keeping the handler's `req` immutable.
 
 ## Wiring it up
 
@@ -224,7 +225,7 @@ The validators are just structs conforming to a `Validator` trait, run through a
 def main() raises:
     var app = App()
     app.get("/", "index")
-    app.get("/notes/{id}", "note_show")
+    app.get("/notes/{id:int}", "note_show")
     app.post("/notes", "note_create")
 
     var templates = Templates("templates")
@@ -238,8 +239,8 @@ def main() raises:
 
 The route *names* (`"index"`, `"note_show"`, ...) are exactly what `__call__` branches on above — the route table is the single source of truth for both routing and dispatch. They also still earn their keep on the routing side: registering `/notes/{id}` for `GET` and `/notes` for `POST` is what gives you a real `405 Method Not Allowed` (with an `Allow` header) when someone `DELETE`s a path you only registered for `GET`. That logic lives in the router, not your handler.
 
-!!! note "The template directory is resolved from the working directory"
-    `Templates("templates")` looks for `./templates/` relative to **where you run the binary**, not where the binary lives. Run the app from your project root (where `templates/` sits) or the first render raises `template not found`. A binary-relative or embedded-template story is on the roadmap.
+!!! note "The template directory follows the binary"
+    `Templates("templates")` first looks beside the running executable, then one directory above it. A scaffolded `build/app` therefore finds the project's sibling `templates/` even when launched from another working directory. Set `BALDR_TEMPLATE_DIR` for an explicit deployment override; inspect `templates.root` to see the resolved directory.
 
 ## Build and run
 
@@ -310,14 +311,11 @@ That's the full app: routing, path params, an auto-escaping template loop, JSON 
 
 ## What we'd want next
 
-Building this end-to-end, we hit real rough edges. baldr is pre-alpha and we log these honestly — they're the developer-experience punch-list:
+Building this end-to-end still exposes one deliberate rough edge:
 
-- **`validate` re-parses the body.** `req.validate(...)` parses the JSON to check it, discards it, then `req.json()` parses again. We want `validate` to hand back the parsed `JsonValue` so you pay for one parse.
 - **No typed JSON accessors.** Pulling a value out is `data.get("title").string_val` — you reach into a raw struct field and silently get an empty string if the type is wrong, instead of `data.get_string("title")` returning an `Optional`. A typed accessor layer would remove a class of quiet bugs.
-- **Bad path params raise a 500.** `params.get_int` throws on `/notes/abc` because the `{id}` pattern happily matches non-numeric segments. We want typed route params (`/notes/{id:int}`) that 404 on a mismatch instead of surfacing a 500.
-- **Templates resolve from the CWD.** `Templates("templates")` breaks if you run the binary from anywhere but the project root. Embedding templates into the binary (the whole "one static artifact" promise) is the fix we want.
 
-Two items that used to live on this list are fixed: literals now flow into baldr APIs directly (`Response.text("hi")`, no `String(...)` wrap needed), and `RouteHandler.__call__` now receives the matched route's `name` (see "Dispatch" above), so handlers branch on `name` instead of restating the route table as an `if`-chain over `req.path`.
+Five items that used to live on this list are fixed: request validation now retains its parsed JSON, `{id:int}` rejects bad numeric segments before dispatch, templates resolve from the executable, literals flow into baldr APIs directly (`Response.text("hi")`, no `String(...)` wrap needed), and `RouteHandler.__call__` receives the matched route's `name` (see "Dispatch" above).
 
 None of these block the app — it builds and serves today. They're exactly the kind of thing this tutorial exists to surface.
 

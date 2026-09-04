@@ -95,7 +95,7 @@ The built-in validators:
 | `StringLength(field, min, max)` | a string field's length is in range |
 | `FieldType(field, type)` | the field is the expected JSON type |
 
-A `ValidationResult` is `Sized` — `len(result) == 0` means valid. `result.to_response()` renders a `422 Unprocessable Entity` with a machine-readable list of `FieldError`s (`field`, `code`, `message`). You can also `merge` two results to run validators in stages.
+A `ValidationResult` is `Sized` — `len(result) == 0` means valid. `result.to_response()` renders a `422 Unprocessable Entity` with a machine-readable list of `FieldError`s (`field`, `code`, `message`). `result.value` holds the body parsed by `validate()`, so the handler does not need a second `Request.json()` call. You can also `merge` two results to run validators in stages.
 
 !!! warning "Rough edge — validators are per-field, not per-struct"
     You list validators one field at a time; there's no `@validate` derive that reads a struct's shape. For a handful of fields it's clear; for large payloads it's repetitive. A schema-derive is on the punch-list. Until then, keep a `validate_note()` helper next to each model.
