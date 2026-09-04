@@ -1,6 +1,6 @@
 [workspace]
 authors = ["Adam Kruger <adam@revelry-inc.com>", "Light of Baldr LLC"]
-channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+channels = ["https://conda.modular.com/max", "conda-forge"]
 name = "baldr"
 description = "A general-purpose, batteries-included Mojo package for building HTTP-fronted applications end-to-end in pure Mojo. Apache-2.0. Does not implement or describe any separately-maintained proprietary technology of Light of Baldr LLC."
 platforms = ["linux-aarch64", "linux-64"]
@@ -30,5 +30,5 @@ bench-cpu = "mojo build bench/bench_cpu.mojo -I src -o build/bench-cpu && build/
 build = "echo 'phase 5 — examples; `pixi run examples` builds all three under build/'"
 
 [dependencies]
-mojo = ">=1.0.0b1"
-max  = ">=26.2"
+mojo = "==1.0.0"
+max  = "==26.5.0"
