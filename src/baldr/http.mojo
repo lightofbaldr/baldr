@@ -144,6 +144,21 @@ def socket_peer_ip(fd: c_int) -> String:
          + String(Int(addr[6])) + "." + String(Int(addr[7]))
 
 
+# ── Process primitives (prefork) ──────────────────────────────────────────
+def process_fork() -> c_int:
+    """`fork()`: 0 in the child, the child's pid in the parent, -1 on failure."""
+    return external_call["fork", c_int]()
+
+
+def process_wait() -> c_int:
+    """`wait()` for any child to exit. Returns the child pid (>0) or -1."""
+    return external_call["wait", c_int, c_int](c_int(0))
+
+
+def process_getpid() -> c_int:
+    return external_call["getpid", c_int]()
+
+
 def _find_header_end(buf: List[UInt8]) -> Int:
     """Return the index just past the CRLFCRLF header terminator, or -1 if the
     headers aren't fully received yet."""

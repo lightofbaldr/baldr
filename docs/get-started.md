@@ -58,7 +58,8 @@ struct MyApp(DispatchHandler, Copyable, Movable):
         return Response.html("<h1>hello from baldr</h1>")
 
 def main() raises:
-    App().run(MyApp(), port=8080)
+    var app = App()
+    app.run(MyApp(), port=8080)
 ```
 
 ## Build & run

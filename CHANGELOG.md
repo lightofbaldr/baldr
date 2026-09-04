@@ -5,6 +5,13 @@ Newest entries first.
 
 ## One `run`: the App carries its parts (2026-09-04)
 
+- **`workers=N` on `run`.** Prefork moved into the App: the parent runs
+  `on_startup`, binds, forks `N` workers that share the socket, and each
+  worker runs the full pipeline it inherited (mounts, middleware, routes,
+  error handler). No `Copyable` bound. `run_concurrent` stays as a
+  deprecated wrapper; `fork`/`wait`/`getpid` live in `baldr.http` as
+  `process_*`. Punch-list P0 #5 closes; supervision and keep-alive remain.
+
 - **`App[M: Middleware = NoMiddleware, E: ErrorHandler = DefaultErrorHandler,
   L: LifecycleHooks = NoLifecycle]`.** Middleware, the error handler and the
   lifecycle hooks are type parameters with defaults, inferred from the

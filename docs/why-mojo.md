@@ -25,7 +25,8 @@ struct HelloApp(DispatchHandler, Copyable, Movable):
         return Response.text("Hello, baldr\n")
 
 def main() raises:
-    App().run(HelloApp(), port=8080)
+    var app = App()
+    app.run(HelloApp(), port=8080)
 ```
 
 That `__call__` is not being interpreted. It's compiled, inlined where the compiler can, and called directly. The whole path — parse the request, dispatch, render the response to bytes, write the socket — is your one binary running native code.

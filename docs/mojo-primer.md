@@ -104,7 +104,8 @@ def run[H: DispatchHandler](mut self, var handler: H, port: Int): ...
 read it as: *"`H` is some type that conforms to `DispatchHandler`, chosen at compile time; `handler` and `port` are the runtime values."* Because your handler's type is baked in at compile time, there's **no per-request vtable lookup** — the dispatch is monomorphized, which is a big part of why baldr is fast. You almost never write the `[H]` yourself; the compiler infers it from what you pass:
 
 ```mojo
-App().run(HelloApp(), port=8080)     # H = HelloApp, inferred
+var app = App()
+app.run(HelloApp(), port=8080)     # H = HelloApp, inferred
 ```
 
 (Python analog: generics, but resolved and specialized at build time instead of erased at runtime.)

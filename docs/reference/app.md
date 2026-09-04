@@ -279,8 +279,8 @@ asset mount is registered or the path isn't a manifest URL.
 ## `run`
 
 ```mojo
-def run[H: RouteHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080) raises
-def run[H: DispatchHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080) raises
+def run[H: RouteHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1) raises
+def run[H: DispatchHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1) raises
 ```
 
 Binds a socket on `host:port` and serves forever. There is one runner; the
@@ -307,6 +307,7 @@ when the loop unwinds (e.g. Ctrl-C).
 | `handler` | `H` (owned) | — | Transferred in with `^` if you built it earlier. |
 | `host` | `String` | `"0.0.0.0"` | Bind address (informational in the log; the socket binds all interfaces). |
 | `port` | `Int` | `8080` | TCP port. |
+| `workers` | `Int` | `1` | `N > 1` preforks `N` processes sharing the socket; each runs the full pipeline. See [Concurrency](../guide/concurrency.md). |
 
 ```mojo
 var app = App(middleware=Chain((SecurityHeaders(), RequestLogger())), errors=JsonErrorHandler())
@@ -338,10 +339,10 @@ var resp = app.handle(h, get("/blocked"))
 
 !!! warning "The accept loop is single-threaded and blocking"
     `run` is one `accept → read → dispatch → write → close` loop on a single
-    thread. There is no keep-alive and no concurrency inside it — a slow handler
-    blocks the next request. Parallelism today comes from the prefork worker
-    pool (`baldr.concurrency`), which does not yet drive this pipeline; that is
-    the next item on the roadmap.
+    thread per worker. There is no keep-alive and no concurrency inside one
+    worker — a slow handler blocks that worker's next request. Parallelism
+    comes from `workers=N`: a prefork pool where every worker runs this same
+    pipeline.
 
 ## Deprecated runners
 

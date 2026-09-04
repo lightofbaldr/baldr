@@ -8,7 +8,7 @@ Test concurrency (4 workers handle 4 slow requests in parallel):
     for i in 1 2 3 4; do time curl -s http://127.0.0.1:8099/slow; done
     # vs serial: all 4 finish in ~1s total, not ~4s
 """
-from baldr.concurrency import run_concurrent
+from baldr.app import App
 from baldr.request import Request
 from baldr.response import Response
 from baldr.app import DispatchHandler
@@ -33,4 +33,5 @@ struct SlowHandler(DispatchHandler, Copyable, Movable):
 
 
 def main() raises:
-    run_concurrent(SlowHandler(String("baldr-prefork")), port=8099, workers=4)
+    var app = App()
+    app.run(SlowHandler(String("baldr-prefork")), port=8099, workers=4)

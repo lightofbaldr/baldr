@@ -108,7 +108,8 @@ struct Site(DispatchHandler, Copyable, Movable):
         return Response.html(self.templates.render("index.html", ctx))
 
 def main() raises:
-    App().run(Site(Templates("templates/")), port=8080)
+    var app = App()
+    app.run(Site(Templates("templates/")), port=8080)
 ```
 
 ---

@@ -15,7 +15,8 @@ struct HelloApp(DispatchHandler, Copyable, Movable):
         return Response.text("Hello, baldr\n")
 
 def main() raises:
-    App().run(HelloApp(), port=8080)
+    var app = App()
+    app.run(HelloApp(), port=8080)
 ```
 
 Build and run it:
@@ -67,11 +68,12 @@ Response.text("nope\n", 404)             # a status code
 Response.redirect("/elsewhere")          # 302
 ```
 
-## Step 4 — `App().run(...)`
+## Step 4 — `app.run(...)`
 
 ```mojo
 def main() raises:
-    App().run(HelloApp(), port=8080)
+    var app = App()
+    app.run(HelloApp(), port=8080)
 ```
 
 `App()` is the server; `.run(handler, port=...)` binds the socket and starts the accept loop. It hands each connection's parsed `Request` to your handler and writes the returned `Response` back on the wire.
@@ -93,6 +95,6 @@ No interpreter in that path. The whole loop is your one compiled binary.
 - Your app is a **struct** conforming to `DispatchHandler`; it owns state between requests.
 - `__call__(mut self, req) raises -> Response` handles every request.
 - `Response.text/html/json/redirect` build the reply.
-- `App().run(handler, port=...)` serves it.
+- `app.run(handler, port=...)` serves it.
 
 Right now our handler answers *everything* the same way. Next we'll route by path and method: **[Routing & Path Params →](routing.md)**.

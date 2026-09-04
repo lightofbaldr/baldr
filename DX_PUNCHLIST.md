@@ -58,12 +58,11 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
    logs elapsed ms; `RateLimitMW(cooldown_s, what)` is a chain stage keyed on `req.peer`. Conformers
    may still declare `self`.
 
-5. **Concurrency ⟂ everything else.** `run_concurrent` (prefork) bypasses the whole App pipeline — no
-   routes, middleware, error handler, lifecycle, or static mounts — so a real app *cannot be run
-   concurrently*. And with prefork, any handler that mutates `self` (counter, cache, chat list)
-   **silently diverges per worker** (counts go backwards on refresh) with no warning.
-   *Fix:* make `App.run(workers=N)` fork internally and drive the full pipeline; sanction
-   `baldr.queue` as the cross-worker shared store with an example. `concurrency.mojo` vs `app.mojo`.
+5. ~~**Concurrency ⟂ everything else.**~~ ✅ **SHIPPED 2026-09-04.** `App.run(handler, workers=N)`
+   forks inside `run`; every worker inherits the App and runs the full pipeline (mounts, middleware,
+   routes, error handler); `on_startup` runs once in the parent. `run_concurrent` is a deprecated
+   wrapper. Per-worker divergence of `mut self` state is documented, with `baldr.db` / `baldr.queue`
+   as the shared stores. *Still open:* worker supervision / graceful shutdown, keep-alive.
 
 6. **No package manager, no scaffold.** baldr can't be pip/pixi-installed; you clone + depend via a
    brittle relative `-I ../mojo-bundle/src`. Ship a `baldr new myapp` scaffold (wires `pixi.toml` +

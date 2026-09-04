@@ -96,7 +96,8 @@ struct Echo(DispatchHandler, Copyable, Movable):
         return Response.json(reply)
 
 def main() raises:
-    App().run(Echo(), port=8080)
+    var app = App()
+    app.run(Echo(), port=8080)
 ```
 
 ```console

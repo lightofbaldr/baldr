@@ -47,7 +47,8 @@ struct Counter(DispatchHandler, Copyable, Movable):
         )
 
 def main() raises:
-    App().run(Counter(0, "hello"), port=8080)
+    var app = App()
+    app.run(Counter(0, "hello"), port=8080)
 ```
 
 Every request calls `Counter.__call__`, and every request increments the *same* `hits` field. That is why the signature is `mut self` and not plain `self`: the handler is allowed to mutate itself while it serves. A cache warms, a counter climbs, a rate limiter records the hit time — all in fields, no globals.
@@ -126,7 +127,8 @@ struct Api(DispatchHandler, Copyable, Movable):
         return Response.text("not found\n", 404)
 
 def main() raises:
-    App().run(Api(), port=8080)
+    var app = App()
+    app.run(Api(), port=8080)
 ```
 
 **With routes.** Register patterns, switch to a `RouteHandler`, receive `params`

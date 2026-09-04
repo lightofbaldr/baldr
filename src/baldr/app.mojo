@@ -47,6 +47,7 @@ from .http import (
     socket_create, socket_reuseaddr, make_sockaddr_in,
     socket_bind, socket_listen, socket_accept, socket_close,
     read_request, write_all, socket_peer_ip,
+    process_fork, process_wait, process_getpid,
 )
 from .request import Request, parse_request
 from .response import Response
@@ -385,35 +386,68 @@ struct App[
             raise Error(String("baldr: listen() failed"))
         return sock
 
-    def _serve_loop[H: RouteHandler](mut self, var handler: H, use_router: Bool, host: String, port: Int) raises:
+    def _accept_forever[H: RouteHandler](mut self, sock: c_int, mut handler: H, use_router: Bool) raises:
+        """The serial accept loop: accept → read → pipeline → write → close."""
+        while True:
+            var client = socket_accept(sock)
+            if Int(client) < 0:
+                continue
+            var raw = read_request(client)
+            if len(raw) == 0:
+                socket_close(client)
+                continue
+            var resp: Response
+            var req: Request
+            var parsed = True
+            try:
+                req = parse_request(raw, socket_peer_ip(client))
+            except:
+                req = Request()
+                parsed = False
+            if parsed:
+                resp = self._pipeline(handler, req, use_router)
+            else:
+                resp = self.errors.render_error(400, String("Bad Request"), req)
+            var resp_bytes = resp.to_bytes()
+            write_all(client, resp_bytes)
+            socket_close(client)
+
+    def _serve_loop[H: RouteHandler](mut self, var handler: H, use_router: Bool, host: String, port: Int, workers: Int) raises:
         self.lifecycle.on_startup()
         try:
             var sock = self._listen(host, port)
-            print("[baldr] listening on " + host + " port " + String(port)
-                  + " (routes: " + String(len(self.router.entries) if use_router else 0) + ")")
-            while True:
-                var client = socket_accept(sock)
-                if Int(client) < 0:
-                    continue
-                var raw = read_request(client)
-                if len(raw) == 0:
-                    socket_close(client)
-                    continue
-                var resp: Response
-                var req: Request
-                var parsed = True
-                try:
-                    req = parse_request(raw, socket_peer_ip(client))
-                except:
-                    req = Request()
-                    parsed = False
-                if parsed:
-                    resp = self._pipeline(handler, req, use_router)
-                else:
-                    resp = self.errors.render_error(400, String("Bad Request"), req)
-                var resp_bytes = resp.to_bytes()
-                write_all(client, resp_bytes)
-                socket_close(client)
+            var routes = String(len(self.router.entries) if use_router else 0)
+            if workers <= 1:
+                print("[baldr] listening on " + host + " port " + String(port) + " (routes: " + routes + ")")
+                self._accept_forever(sock, handler, use_router)
+            else:
+                # Prefork: the parent binds and listens, then forks N workers
+                # that accept on the shared socket (the kernel load-balances).
+                # Each worker inherits this App and the handler by fork, so
+                # per-worker state (counters, rate-limit tables) diverges by
+                # design — shared state belongs in baldr.db or baldr.queue.
+                print("[baldr] prefork: " + String(workers) + " workers on " + host + " port "
+                      + String(port) + " (parent pid " + String(Int(process_getpid()))
+                      + ", routes: " + routes + ")")
+                var spawned = 0
+                for i in range(workers):
+                    var pid = Int(process_fork())
+                    if pid == 0:
+                        print("[baldr] worker " + String(i) + " pid " + String(Int(process_getpid())) + " ready")
+                        self._accept_forever(sock, handler, use_router)
+                    elif pid > 0:
+                        spawned += 1
+                    else:
+                        raise Error(String("baldr: fork() failed"))
+                # Parent: block until the workers are gone (Ctrl-C kills the
+                # whole process group).
+                var alive = spawned
+                while alive > 0:
+                    var w = Int(process_wait())
+                    if w > 0:
+                        alive -= 1
+                    else:
+                        break
         finally:
             self.lifecycle.on_shutdown()
 
@@ -423,21 +457,25 @@ struct App[
         var handler: H,
         host: String = String("0.0.0.0"),
         port: Int = 8080,
+        workers: Int = 1,
     ) raises:
         """Bind and serve forever. The route table is resolved before each
         call to the handler (405 with `Allow` / 404 on a miss) when routes
-        are registered; otherwise the handler receives empty params."""
-        self._serve_loop(handler^, True, host, port)
+        are registered; otherwise the handler receives empty params.
+        `workers > 1` preforks that many processes sharing the listening
+        socket, each running the full pipeline."""
+        self._serve_loop(handler^, True, host, port, workers)
 
     def run[H: DispatchHandler](
         mut self,
         var handler: H,
         host: String = String("0.0.0.0"),
         port: Int = 8080,
+        workers: Int = 1,
     ) raises:
         """Bind and serve forever with a `DispatchHandler`: the handler routes
-        by hand, so the route table is not consulted."""
-        self._serve_loop(_RouteAdapter(handler^), False, host, port)
+        by hand, so the route table is not consulted. `workers > 1` preforks."""
+        self._serve_loop(_RouteAdapter(handler^), False, host, port, workers)
 
     # ── Deprecated v0.1 runners ──────────────────────────────────────────
     # Kept so every v0.1 call site still compiles. Each is the one `run`

@@ -11,7 +11,8 @@ from baldr.config import ServerConfig
 
 def main() raises:
     var cfg = ServerConfig.from_env()
-    App().run(MyApp(), port=cfg.port)
+    var app = App()
+    app.run(MyApp(), port=cfg.port)
 ```
 
 Each field has a default, so an empty environment still boots:
