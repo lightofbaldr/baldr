@@ -62,8 +62,9 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
    forks inside `run`; every worker inherits the App and runs the full pipeline (mounts, middleware,
    routes, error handler); `on_startup` runs once in the parent. `run_concurrent` is a deprecated
    wrapper. Per-worker divergence of `mut self` state is documented, with `baldr.db` / `baldr.queue`
-   as the shared stores. Keep-alive shipped the same day (`serve_connection`). *Still open:* worker
-   supervision / graceful shutdown.
+   as the shared stores. Keep-alive shipped the same day (`serve_connection`). Worker supervision
+   and graceful shutdown shipped the same day: blocked-signal polling, crash-loop-protected
+   respawn, active-connection drain, and a configurable grace deadline.
 
 6. ~~**No package manager, no scaffold.**~~ ✅ **SCAFFOLD SHIPPED 2026-09-04.** `pixi run new --
    myapp` creates a pinned, buildable project with the checkout's absolute `src/` include path,
@@ -89,8 +90,10 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
 - **No TLS / HTTP2** — plaintext HTTP/1.1 only; a reverse proxy (Caddy/nginx) is mandatory, and there
   is zero `X-Forwarded-*`/PROXY-protocol trust handling. Documented; decide if minimal TLS belongs
   in-tree. `app.mojo` accept loop.
-- **No worker supervision / graceful shutdown.** Dead workers aren't respawned; no SIGTERM drain, so
-  orchestrator stop signals drop in-flight requests. `concurrency.mojo`:116-124.
+- ~~**No worker supervision / graceful shutdown.**~~ ✅ **SHIPPED 2026-09-04.** Dead workers are
+  respawned with bounded backoff; SIGTERM/SIGINT drain active connections, reap the pool, run the
+  parent lifecycle shutdown hook, and return normally. Five respawns inside 10 seconds terminate a
+  crash loop instead of spinning.
 - **Body double-parse.** `req.validate()` parses the JSON body then discards it; the handler calls
   `req.json()` and parses the same body again. Have `validate` return the parsed `JsonValue`.
   `request.mojo`:73-82 & 56-58.

@@ -5,6 +5,13 @@ Newest entries first.
 
 ## One `run`: the App carries its parts (2026-09-04)
 
+- **Prefork supervision and graceful shutdown.** `run(..., workers=N,
+  grace_secs=5)` blocks SIGTERM/SIGINT and polls instead of invoking Mojo from
+  an asynchronous signal callback. Workers drain their active connection;
+  the parent reaps and respawns unexpected exits with backoff, gives up after
+  five respawns inside 10 seconds, and SIGKILLs only workers that outlive the
+  grace deadline. Single-process mode follows the same drain contract.
+
 - **Keep-alive and streaming in the accept loop.** Every `run` now serves a
   connection as a loop: HTTP/1.1 keeps it open by default (HTTP/1.0 opts in
   with `Connection: keep-alive`), pipelined requests are served in order,

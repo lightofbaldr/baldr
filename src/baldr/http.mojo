@@ -37,6 +37,12 @@ comptime SO_RCVTIMEO: c_int = 20                       # Linux SO_RCVTIMEO
 comptime READ_TIMEOUT_SECS: Int = 15                   # per-recv stall budget (slowloris guard)
 comptime MAX_HEADER_BYTES: Int = 64 * 1024             # cap on accumulated header bytes
 comptime DEFAULT_MAX_BODY_BYTES: Int = 10 * 1024 * 1024  # default body cap (matches ServerConfig)
+comptime SIGNAL_INT: Int = 2
+comptime SIGNAL_KILL: Int = 9
+comptime SIGNAL_TERM: Int = 15
+comptime _SIG_BLOCK: c_int = 0
+comptime _WNOHANG: c_int = 1
+comptime _SIGSET_BYTES: Int = 128
 
 
 # ── Socket primitives via FFI ────────────────────────────────────────────
@@ -59,9 +65,9 @@ def socket_reuseaddr(fd: c_int) -> Bool:
 
 
 def socket_recv_timeout(fd: c_int, secs: Int) -> Bool:
-    """Set SO_RCVTIMEO on a client fd so a stalled sender cannot hold the
-    connection — and, on the one-connection-at-a-time accept loop, the whole
-    server — open indefinitely (slowloris). `struct timeval { long tv_sec;
+    """Set SO_RCVTIMEO on a socket fd. On a client, this bounds a stalled
+    sender (slowloris); on the listening socket, it wakes `accept()` so a
+    worker can poll blocked shutdown signals. `struct timeval { long tv_sec;
     long tv_usec }` is 16 bytes on LP64; secs (< 2^32) fits in the low 4 bytes."""
     var tv = List[UInt8](capacity=16)
     for _ in range(16):
@@ -230,6 +236,93 @@ def process_wait() -> c_int:
 
 def process_getpid() -> c_int:
     return external_call["getpid", c_int]()
+
+
+def process_kill(pid: Int, signal: Int) -> Bool:
+    """Send a POSIX signal to `pid`. Returns whether `kill(2)` succeeded."""
+    var rc = external_call["kill", c_int, c_int, c_int](
+        c_int(pid), c_int(signal)
+    )
+    return Int(rc) == 0
+
+
+def process_waitpid_nohang(pid: Int, mut status: c_int) -> c_int:
+    """Non-blocking `waitpid(2)`. Returns a reaped pid, 0, or -1."""
+    return external_call[
+        "waitpid", c_int,
+        c_int, Pointer[c_int, origin_of(status)], c_int,
+    ](c_int(pid), Pointer(to=status), _WNOHANG)
+
+
+def process_waitpid(pid: Int, mut status: c_int) -> c_int:
+    """Blocking `waitpid(2)` for one child. Tests use this to collect pools."""
+    return external_call[
+        "waitpid", c_int,
+        c_int, Pointer[c_int, origin_of(status)], c_int,
+    ](c_int(pid), Pointer(to=status), c_int(0))
+
+
+def process_exit(code: Int):
+    """Exit this process immediately without unwinding inherited parent state."""
+    external_call["_exit", NoneType, c_int](c_int(code))
+
+
+def _signal_set() -> List[UInt8]:
+    """Allocate Linux's 128-byte `sigset_t` representation."""
+    var signals = List[UInt8](capacity=_SIGSET_BYTES)
+    for _ in range(_SIGSET_BYTES):
+        signals.append(0)
+    return signals^
+
+
+def signal_block() -> Bool:
+    """Block SIGTERM and SIGINT in the calling process.
+
+    Children created by `fork()` inherit this mask. The App polls the pending
+    set between connections instead of running asynchronous callbacks into
+    Mojo state.
+    """
+    var signals = _signal_set()
+    var previous = _signal_set()
+    var rc = external_call[
+        "sigemptyset", c_int, Pointer[UInt8, origin_of(signals)],
+    ](signals.unsafe_ptr())
+    if Int(rc) != 0:
+        return False
+    rc = external_call[
+        "sigaddset", c_int, Pointer[UInt8, origin_of(signals)], c_int,
+    ](signals.unsafe_ptr(), c_int(SIGNAL_TERM))
+    if Int(rc) != 0:
+        return False
+    rc = external_call[
+        "sigaddset", c_int, Pointer[UInt8, origin_of(signals)], c_int,
+    ](signals.unsafe_ptr(), c_int(SIGNAL_INT))
+    if Int(rc) != 0:
+        return False
+    rc = external_call[
+        "sigprocmask", c_int,
+        c_int,
+        Pointer[UInt8, origin_of(signals)],
+        Pointer[UInt8, origin_of(previous)],
+    ](_SIG_BLOCK, signals.unsafe_ptr(), previous.unsafe_ptr())
+    return Int(rc) == 0
+
+
+def signal_pending() -> Bool:
+    """Return whether blocked SIGTERM or SIGINT is pending."""
+    var signals = _signal_set()
+    var rc = external_call[
+        "sigpending", c_int, Pointer[UInt8, origin_of(signals)],
+    ](signals.unsafe_ptr())
+    if Int(rc) != 0:
+        return False
+    var term = external_call[
+        "sigismember", c_int, Pointer[UInt8, origin_of(signals)], c_int,
+    ](signals.unsafe_ptr(), c_int(SIGNAL_TERM))
+    var interrupt = external_call[
+        "sigismember", c_int, Pointer[UInt8, origin_of(signals)], c_int,
+    ](signals.unsafe_ptr(), c_int(SIGNAL_INT))
+    return Int(term) == 1 or Int(interrupt) == 1
 
 
 def _find_header_end(buf: List[UInt8]) -> Int:

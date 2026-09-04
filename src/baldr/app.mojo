@@ -27,9 +27,11 @@ Per request, in order: static mounts → asset mount → `middleware.before`
 (a non-`MW_PASS` response short-circuits everything below) → route table
 (405 with `Allow` / 404 on a miss, when routes are registered) → handler →
 `middleware.after` → on any exception, `errors.render_error(500, ...)`.
-`lifecycle.on_startup()` runs once before binding, `on_shutdown()` once
-after the loop exits. `handle(handler, req)` runs that same pipeline on one
-in-memory request, which is how you test an app without a socket.
+`lifecycle.on_startup()` runs once before binding, `on_shutdown()` once in
+the parent after a graceful stop. SIGTERM/SIGINT drain the active connection;
+prefork workers are supervised and replaced unless they enter a crash loop.
+`handle(handler, req)` runs that same pipeline on one in-memory request,
+which is how you test an app without a socket.
 
 Why parameters and not a builder chain: Mojo 1.0 cannot store a function or
 a trait object in a struct field, but it can store a concrete `M` / `E` / `L`
@@ -42,12 +44,16 @@ that compiled before still compiles and behaves the same.
 
 from std.ffi import c_int
 from std.pathlib import Path
+from std.time import perf_counter_ns, sleep
 
 from .http import (
     socket_create, socket_reuseaddr, make_sockaddr_in,
     socket_bind, socket_listen, socket_accept, socket_close,
+    socket_recv_timeout,
     read_request, read_request_from, write_all, socket_peer_ip, wants_keep_alive,
-    process_fork, process_wait, process_getpid,
+    process_fork, process_getpid, process_kill, process_waitpid,
+    process_waitpid_nohang, process_exit, signal_block, signal_pending,
+    SIGNAL_TERM, SIGNAL_KILL,
     READ_TIMEOUT_SECS, KEEPALIVE_IDLE_SECS,
 )
 from .streaming import ResponseStream
@@ -528,68 +534,179 @@ struct App[
                 return
 
     # ── The accept loop + prefork pool ───────────────────────────────────
-    def _spawn_workers(self, workers: Int, host: String, port: Int, routes: String) raises -> Bool:
+    def _remove_live_pid(self, mut live: List[Int], pid: Int) -> Bool:
+        for i in range(len(live)):
+            if live[i] == pid:
+                _ = live.pop(i)
+                return True
+        return False
+
+    def _stop_workers(self, mut live: List[Int], grace_secs: Int):
+        """Ask workers to drain, then kill only those past the deadline."""
+        for i in range(len(live)):
+            _ = process_kill(live[i], SIGNAL_TERM)
+
+        var grace = grace_secs if grace_secs > 0 else 0
+        var deadline = perf_counter_ns() + grace * 1_000_000_000
+        while len(live) > 0 and perf_counter_ns() < deadline:
+            var status: c_int = 0
+            var reaped = Int(process_waitpid_nohang(-1, status))
+            while reaped > 0:
+                _ = self._remove_live_pid(live, reaped)
+                status = 0
+                reaped = Int(process_waitpid_nohang(-1, status))
+            if len(live) > 0:
+                sleep(0.05)
+
+        # At the deadline, preserve the exact live set: these are the only
+        # processes that may receive SIGKILL.
+        for i in range(len(live)):
+            _ = process_kill(live[i], SIGNAL_KILL)
+        while len(live) > 0:
+            var status: c_int = 0
+            var reaped = Int(process_waitpid(-1, status))
+            if reaped <= 0:
+                break
+            _ = self._remove_live_pid(live, reaped)
+
+    def _spawn_workers(
+        self,
+        workers: Int,
+        host: String,
+        port: Int,
+        routes: String,
+        grace_secs: Int,
+    ) raises -> Bool:
         """Single-process mode returns True at once. Prefork mode forks
         `workers` children that each return True (serve), while the parent
-        waits for them all and returns False. Each worker inherits this App
-        and the handler by fork, so per-worker state (counters, rate-limit
-        tables) diverges by design — shared state belongs in baldr.db or
-        baldr.queue."""
+        supervises them and returns False after shutdown. Each worker inherits
+        this App and the handler by fork, so per-worker state diverges by
+        design — shared state belongs in baldr.db or baldr.queue."""
         if workers <= 1:
             print("[baldr] listening on " + host + " port " + String(port) + " (routes: " + routes + ")")
             return True
         print("[baldr] prefork: " + String(workers) + " workers on " + host + " port "
               + String(port) + " (parent pid " + String(Int(process_getpid()))
               + ", routes: " + routes + ")")
-        var spawned = 0
+        var live = List[Int]()
+        var worker_id = 0
         for i in range(workers):
             var pid = Int(process_fork())
             if pid == 0:
                 print("[baldr] worker " + String(i) + " pid " + String(Int(process_getpid())) + " ready")
                 return True
             elif pid > 0:
-                spawned += 1
+                live.append(pid)
+                worker_id += 1
             else:
+                self._stop_workers(live, grace_secs)
                 raise Error(String("baldr: fork() failed"))
-        # Parent: block until the workers are gone (Ctrl-C kills the whole
-        # process group).
-        var alive = spawned
-        while alive > 0:
-            var w = Int(process_wait())
-            if w > 0:
-                alive -= 1
-            else:
+
+        var respawn_ns = List[Int]()
+        var crash_loop = False
+        while len(live) > 0:
+            if signal_pending():
+                print("[baldr] shutdown requested; draining workers")
                 break
+
+            var status: c_int = 0
+            var reaped = Int(process_waitpid_nohang(-1, status))
+            while reaped > 0:
+                if self._remove_live_pid(live, reaped):
+                    var now = perf_counter_ns()
+                    while len(respawn_ns) > 0 and now - respawn_ns[0] > 10_000_000_000:
+                        _ = respawn_ns.pop(0)
+                    if len(respawn_ns) >= 5:
+                        crash_loop = True
+                        break
+
+                    # Linear 100–500 ms backoff keeps a flapping worker from
+                    # turning the supervisor itself into a hot loop.
+                    sleep(Float64(len(respawn_ns) + 1) * 0.1)
+                    var pid = Int(process_fork())
+                    if pid == 0:
+                        print("[baldr] worker " + String(worker_id) + " pid " + String(Int(process_getpid())) + " ready")
+                        return True
+                    if pid < 0:
+                        self._stop_workers(live, grace_secs)
+                        raise Error(String("baldr: fork() failed during worker respawn"))
+                    live.append(pid)
+                    respawn_ns.append(perf_counter_ns())
+                    worker_id += 1
+                status = 0
+                reaped = Int(process_waitpid_nohang(-1, status))
+            if crash_loop:
+                print("[baldr] worker crash loop; giving up")
+                break
+            sleep(0.25)
+
+        self._stop_workers(live, grace_secs)
+        if crash_loop:
+            raise Error(String("baldr: worker crash loop"))
         return False
 
-    def _serve_loop[H: RouteHandler](mut self, var handler: H, use_router: Bool, host: String, port: Int, workers: Int) raises:
+    def _serve_loop[H: RouteHandler](mut self, var handler: H, use_router: Bool, host: String, port: Int, workers: Int, grace_secs: Int) raises:
+        if not signal_block():
+            raise Error(String("baldr: failed to block SIGTERM/SIGINT"))
+        var sock: c_int = -1
         self.lifecycle.on_startup()
         try:
-            var sock = self._listen(host, port)
+            sock = self._listen(host, port)
+            if not socket_recv_timeout(sock, 1):
+                raise Error(String("baldr: failed to set accept timeout"))
             var routes = String(len(self.router.entries) if use_router else 0)
-            if self._spawn_workers(workers, host, port, routes):
+            if self._spawn_workers(workers, host, port, routes, grace_secs):
                 while True:
                     var client = socket_accept(sock)
                     if Int(client) < 0:
+                        if signal_pending():
+                            break
                         continue
                     self._serve_connection_buffered(client, handler, use_router)
                     socket_close(client)
+                    if signal_pending():
+                        break
+                if workers > 1:
+                    socket_close(sock)
+                    sock = c_int(-1)
+                    process_exit(0)
         finally:
-            self.lifecycle.on_shutdown()
+            try:
+                self.lifecycle.on_shutdown()
+            finally:
+                if Int(sock) >= 0:
+                    socket_close(sock)
 
-    def _serve_loop_stream[H: StreamHandler](mut self, var handler: H, host: String, port: Int, workers: Int) raises:
+    def _serve_loop_stream[H: StreamHandler](mut self, var handler: H, host: String, port: Int, workers: Int, grace_secs: Int) raises:
+        if not signal_block():
+            raise Error(String("baldr: failed to block SIGTERM/SIGINT"))
+        var sock: c_int = -1
         self.lifecycle.on_startup()
         try:
-            var sock = self._listen(host, port)
-            if self._spawn_workers(workers, host, port, String("stream")):
+            sock = self._listen(host, port)
+            if not socket_recv_timeout(sock, 1):
+                raise Error(String("baldr: failed to set accept timeout"))
+            if self._spawn_workers(workers, host, port, String("stream"), grace_secs):
                 while True:
                     var client = socket_accept(sock)
                     if Int(client) < 0:
+                        if signal_pending():
+                            break
                         continue
                     self.serve_connection(client, handler)
                     socket_close(client)
+                    if signal_pending():
+                        break
+                if workers > 1:
+                    socket_close(sock)
+                    sock = c_int(-1)
+                    process_exit(0)
         finally:
-            self.lifecycle.on_shutdown()
+            try:
+                self.lifecycle.on_shutdown()
+            finally:
+                if Int(sock) >= 0:
+                    socket_close(sock)
 
     # ── The one runner ───────────────────────────────────────────────────
     def run[H: RouteHandler](
@@ -598,14 +715,16 @@ struct App[
         host: String = String("0.0.0.0"),
         port: Int = 8080,
         workers: Int = 1,
+        grace_secs: Int = 5,
     ) raises:
         """Bind and serve forever. The route table is resolved before each
         call to the handler (405 with `Allow` / 404 on a miss) when routes
         are registered; otherwise the handler receives empty params.
         Connections are kept alive per `wants_keep_alive`. `workers > 1`
         preforks that many processes sharing the listening socket, each
-        running the full pipeline."""
-        self._serve_loop(handler^, True, host, port, workers)
+        running the full pipeline. SIGTERM/SIGINT drain active connections;
+        `grace_secs` bounds the drain before remaining workers are killed."""
+        self._serve_loop(handler^, True, host, port, workers, grace_secs)
 
     def run[H: DispatchHandler](
         mut self,
@@ -613,10 +732,12 @@ struct App[
         host: String = String("0.0.0.0"),
         port: Int = 8080,
         workers: Int = 1,
+        grace_secs: Int = 5,
     ) raises:
         """Bind and serve forever with a `DispatchHandler`: the handler routes
-        by hand, so the route table is not consulted. `workers > 1` preforks."""
-        self._serve_loop(_RouteAdapter(handler^), False, host, port, workers)
+        by hand, so the route table is not consulted. `workers > 1` preforks.
+        `grace_secs` bounds graceful worker drain on shutdown."""
+        self._serve_loop(_RouteAdapter(handler^), False, host, port, workers, grace_secs)
 
     def run[H: StreamHandler](
         mut self,
@@ -624,11 +745,13 @@ struct App[
         host: String = String("0.0.0.0"),
         port: Int = 8080,
         workers: Int = 1,
+        grace_secs: Int = 5,
     ) raises:
         """Bind and serve forever with a `StreamHandler`: each request gets a
         `ResponseStream` on the client socket (chunked, SSE-capable). Mounts
-        and middleware `before` still apply; `workers > 1` preforks."""
-        self._serve_loop_stream(handler^, host, port, workers)
+        and middleware `before` still apply; `workers > 1` preforks.
+        `grace_secs` bounds graceful worker drain on shutdown."""
+        self._serve_loop_stream(handler^, host, port, workers, grace_secs)
 
     # ── Deprecated v0.1 runners ──────────────────────────────────────────
     # Kept so every v0.1 call site still compiles. Each is the one `run`

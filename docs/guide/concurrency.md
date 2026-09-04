@@ -20,18 +20,20 @@ app.run(handler, port=8080, workers=4)
 def run[H: RouteHandler](
     mut self, var handler: H,
     host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1,
+    grace_secs: Int = 5,
 ) raises
 ```
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `workers` | `Int` | `1` | `1` is the plain single-process loop; `N > 1` forks `N` worker processes that share the listening socket |
+| `grace_secs` | `Int` | `5` | Maximum worker-drain time after SIGTERM/SIGINT; workers still alive at the deadline receive SIGKILL |
 
 Nothing else changes: the middleware, error handler and lifecycle hooks you
 constructed the App with, the route table, static and asset mounts — every
 worker runs the whole pipeline, because it inherited the App by `fork()`.
 `lifecycle.on_startup()` runs once, in the parent, before the fork;
-`on_shutdown()` runs in the parent when the pool exits. No `Copyable` bound:
+`on_shutdown()` runs once in the parent when the pool exits. No `Copyable` bound:
 the handler is not copied, it is inherited.
 
 ## A complete example
@@ -98,7 +100,29 @@ served by baldr-prefork (pid 40116)
 
 Four one-second requests, ~1 second wall-clock total instead of ~4. The `pid` in each reply is the worker that served it — proof the kernel spread the load. A fifth concurrent request would queue behind whichever worker frees up first, because each worker still runs a **serial** accept loop internally.
 
-To stop the pool, Ctrl-C the parent — the whole process group dies together.
+To stop the pool, send SIGTERM or press Ctrl-C. The signal is blocked rather
+than handled asynchronously: the parent polls for it, asks every worker to
+stop, and workers finish their current connection before exiting.
+
+## Shutdown and worker supervision
+
+The prefork parent checks worker state and pending SIGTERM/SIGINT every 250 ms.
+If a worker exits unexpectedly, the parent reaps it and starts a replacement
+after a short linear backoff. 5 respawns inside 10 seconds are treated as a
+crash loop: baldr logs `[baldr] worker crash loop; giving up`, drains the other
+workers, and exits non-zero instead of spinning forever.
+
+Workers inherit the parent's blocked signal mask. They check for shutdown only
+between connections, immediately after closing the client they just served.
+That means a response already in flight is allowed to finish. An idle worker's
+listening `accept()` wakes at least once per second, so it notices a pending
+signal without waiting for another client.
+
+The parent gives workers `grace_secs` (5 seconds by default) to drain. It sends
+SIGKILL only to workers still alive at that deadline, reaps every child, runs
+`lifecycle.on_shutdown()` once, closes the listening socket, and returns from
+`run` normally. `workers=1` uses the same blocked-signal polling and drain
+semantics, without a supervisor process.
 
 ## The rule that comes with it: no shared mutable state
 
@@ -142,10 +166,9 @@ A reasonable starting point for `workers` is your core count. More workers means
 
 ## Honest limits (today)
 
-baldr is pre-alpha, and `workers=N` is the smallest thing that correctly parallelizes. What it is **not**, yet:
+baldr is pre-alpha, and `workers=N` is the smallest thing that correctly parallelizes. Its remaining limits are:
 
 !!! warning "What prefork does not give you yet"
-    - **No graceful shutdown / worker supervision.** The parent `wait()`s for children; if a worker dies, it is **not** re-spawned, and there's no drain-then-exit on a signal. Ctrl-C kills the whole group. A supervisor loop is roadmap.
     - **Still one connection at a time per worker.** Each worker's loop is serial: a kept-alive connection holds its worker until the client is done or idles past `KEEPALIVE_IDLE_SECS` (2 s) — `workers=N` gives you N in-flight connections, not N per worker.
     - **Config is positional.** `workers` is a plain keyword arg; there's no `ServeConfig`-style object wiring host/port/workers together, and no env-var override. (`ServeConfig` exists in `baldr.serve`, but it's the static-file CLI's config — not `run_concurrent`'s.)
 

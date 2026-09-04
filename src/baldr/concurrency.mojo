@@ -3,13 +3,14 @@
 The honest pure-Mojo concurrency model for Mojo 1.0 is **prefork** (the
 classic nginx / old-Apache model), not threads:
 
-  - Parent: `socket_create` → `bind` → `listen`, `lifecycle.on_startup()`,
-    then `fork()` N workers.
+  - Parent: block SIGTERM/SIGINT, `socket_create` → `bind` → `listen`,
+    `lifecycle.on_startup()`, then `fork()` N workers.
   - Each worker: `accept()` on the shared listening socket (the kernel
     load-balances across workers) and runs the serial accept loop with
     the App and handler it inherited by fork — the full pipeline: static
     mounts, assets, middleware, routes, error handler.
-  - Parent: `wait()` for children; on Ctrl-C the whole process group dies.
+  - Parent: poll signals and child state, replace unexpected exits with
+    backoff, and drain/reap the pool on SIGTERM or Ctrl-C.
 
 Why prefork, not pthreads: Mojo 1.0 has no `std.threading`, and handlers and
 middleware are `mut self`. Prefork gives each worker its own process, so

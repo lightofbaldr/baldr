@@ -293,9 +293,9 @@ asset mount is registered or the path isn't a manifest URL.
 ## `run`
 
 ```mojo
-def run[H: RouteHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1) raises
-def run[H: DispatchHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1) raises
-def run[H: StreamHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1) raises
+def run[H: RouteHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1, grace_secs: Int = 5) raises
+def run[H: DispatchHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1, grace_secs: Int = 5) raises
+def run[H: StreamHandler](mut self, var handler: H, host: String = "0.0.0.0", port: Int = 8080, workers: Int = 1, grace_secs: Int = 5) raises
 ```
 
 Binds a socket on `host:port` and serves forever. There is one runner; the
@@ -319,8 +319,8 @@ non-`MW_PASS` response ends the request there; the handler and every `after`
 hook are skipped) → route table → handler → `middleware.after` → and if
 anything raised, `errors.render_error(500, "Internal Server Error", req)`. A
 request that does not parse gets `errors.render_error(400, "Bad Request", ...)`.
-`lifecycle.on_startup()` runs before the bind, `on_shutdown()` in a `finally`
-when the loop unwinds (e.g. Ctrl-C).
+`lifecycle.on_startup()` runs before the bind. `on_shutdown()` runs once in the
+parent after shutdown and child reaping.
 
 | Parameter | Type | Default | Notes |
 |---|---|---|---|
@@ -329,6 +329,18 @@ when the loop unwinds (e.g. Ctrl-C).
 | `host` | `String` | `"0.0.0.0"` | Bind address (informational in the log; the socket binds all interfaces). |
 | `port` | `Int` | `8080` | TCP port. |
 | `workers` | `Int` | `1` | `N > 1` preforks `N` processes sharing the socket; each runs the full pipeline. See [Concurrency](../guide/concurrency.md). |
+| `grace_secs` | `Int` | `5` | Seconds allowed for active worker connections to drain before remaining workers receive SIGKILL. |
+
+### Shutdown
+
+`run` blocks SIGTERM/SIGINT and polls for them between connections; it does not
+run Mojo code from an asynchronous signal handler. In prefork mode the parent
+signals every worker, waits up to `grace_secs`, kills only workers still alive,
+reaps them, calls `on_shutdown()`, closes the listener, and returns normally.
+Workers finish the connection they are currently serving before observing the
+pending signal. An unexpectedly exited worker is respawned with backoff; after
+5 respawns within 10 seconds the parent logs a crash-loop error, drains the
+pool, and exits non-zero. `workers=1` has the same signal and drain behavior.
 
 ```mojo
 var app = App(middleware=Chain((SecurityHeaders(), RequestLogger())), errors=JsonErrorHandler())
