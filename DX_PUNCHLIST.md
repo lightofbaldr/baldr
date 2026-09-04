@@ -63,7 +63,7 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
    routes, error handler); `on_startup` runs once in the parent. `run_concurrent` is a deprecated
    wrapper. Per-worker divergence of `mut self` state is documented, with `baldr.db` / `baldr.queue`
    as the shared stores. Keep-alive shipped the same day (`serve_connection`). Worker supervision
-   and graceful shutdown shipped the same day: blocked-signal polling, crash-loop-protected
+   and graceful shutdown shipped the same day: process-wide handler/self-pipe polling, crash-loop-protected
    respawn, active-connection drain, and a configurable grace deadline.
 
 6. ~~**No package manager, no scaffold.**~~ ✅ **SCAFFOLD SHIPPED 2026-09-04.** `pixi run new --

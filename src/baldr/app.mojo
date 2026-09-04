@@ -52,7 +52,8 @@ from .http import (
     socket_recv_timeout,
     read_request, read_request_from, write_all, socket_peer_ip, wants_keep_alive,
     process_fork, process_getpid, process_kill, process_waitpid,
-    process_waitpid_nohang, process_exit, signal_block, signal_pending,
+    process_waitpid_nohang, process_exit, signal_install, signal_pending,
+    signal_replace_pipe,
     SIGNAL_TERM, SIGNAL_KILL,
     READ_TIMEOUT_SECS, KEEPALIVE_IDLE_SECS,
 )
@@ -593,6 +594,8 @@ struct App[
         for i in range(workers):
             var pid = Int(process_fork())
             if pid == 0:
+                if not signal_replace_pipe():
+                    process_exit(1)
                 print("[baldr] worker " + String(i) + " pid " + String(Int(process_getpid())) + " ready")
                 return True
             elif pid > 0:
@@ -625,6 +628,8 @@ struct App[
                     sleep(Float64(len(respawn_ns) + 1) * 0.1)
                     var pid = Int(process_fork())
                     if pid == 0:
+                        if not signal_replace_pipe():
+                            process_exit(1)
                         print("[baldr] worker " + String(worker_id) + " pid " + String(Int(process_getpid())) + " ready")
                         return True
                     if pid < 0:
@@ -646,8 +651,8 @@ struct App[
         return False
 
     def _serve_loop[H: RouteHandler](mut self, var handler: H, use_router: Bool, host: String, port: Int, workers: Int, grace_secs: Int) raises:
-        if not signal_block():
-            raise Error(String("baldr: failed to block SIGTERM/SIGINT"))
+        if not signal_install():
+            raise Error(String("baldr: failed to install SIGTERM/SIGINT handlers"))
         var sock: c_int = -1
         self.lifecycle.on_startup()
         try:
@@ -678,8 +683,8 @@ struct App[
                     socket_close(sock)
 
     def _serve_loop_stream[H: StreamHandler](mut self, var handler: H, host: String, port: Int, workers: Int, grace_secs: Int) raises:
-        if not signal_block():
-            raise Error(String("baldr: failed to block SIGTERM/SIGINT"))
+        if not signal_install():
+            raise Error(String("baldr: failed to install SIGTERM/SIGINT handlers"))
         var sock: c_int = -1
         self.lifecycle.on_startup()
         try:

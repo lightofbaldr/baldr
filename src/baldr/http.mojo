@@ -17,7 +17,7 @@ Endpoints (this stub):
     *             -> 404 {"error":"not found"}
 """
 
-from std.ffi import c_int, c_size_t, c_ssize_t, external_call
+from std.ffi import c_char, c_int, c_size_t, c_ssize_t, external_call
 from std.os.env import getenv
 from .request import Request
 
@@ -40,9 +40,9 @@ comptime DEFAULT_MAX_BODY_BYTES: Int = 10 * 1024 * 1024  # default body cap (mat
 comptime SIGNAL_INT: Int = 2
 comptime SIGNAL_KILL: Int = 9
 comptime SIGNAL_TERM: Int = 15
-comptime _SIG_BLOCK: c_int = 0
+comptime SIGNAL_FD_R: c_int = 1022
+comptime SIGNAL_FD_W: c_int = 1023
 comptime _WNOHANG: c_int = 1
-comptime _SIGSET_BYTES: Int = 128
 
 
 # ── Socket primitives via FFI ────────────────────────────────────────────
@@ -267,62 +267,103 @@ def process_exit(code: Int):
     external_call["_exit", NoneType, c_int](c_int(code))
 
 
-def _signal_set() -> List[UInt8]:
-    """Allocate Linux's 128-byte `sigset_t` representation."""
-    var signals = List[UInt8](capacity=_SIGSET_BYTES)
-    for _ in range(_SIGSET_BYTES):
-        signals.append(0)
-    return signals^
+def process_execv(mut args: List[String]) -> c_int:
+    """Replace this process image with `args[0]` and its null-terminated argv.
 
-
-def signal_block() -> Bool:
-    """Block SIGTERM and SIGINT in the calling process.
-
-    Children created by `fork()` inherit this mask. The App polls the pending
-    set between connections instead of running asynchronous callbacks into
-    Mojo state.
+    A fresh executable is the only faithful way to test process-wide signal
+    handling in a Mojo program whose runtime creates threads before `main`.
     """
-    var signals = _signal_set()
-    var previous = _signal_set()
+    if len(args) == 0:
+        return c_int(-1)
+    var raw_args = List[Optional[Pointer[c_char, ImmutAnyOrigin]]](
+        capacity=len(args) + 1
+    )
+    for ref arg in args:
+        var arg_ptr = arg.as_c_string_slice().unsafe_ptr().as_unsafe_any_origin()
+        raw_args.append(arg_ptr)
+    raw_args.append(None)
+    var path_ptr = raw_args[0].value()
+    return external_call[
+        "execv", c_int, type_of(path_ptr), type_of(raw_args.unsafe_ptr()),
+    ](path_ptr, raw_args.unsafe_ptr())
+
+
+def baldr_on_signal(sig: c_int) abi("C"):
+    """Async-signal-safe process handler: enqueue one signal-number byte.
+
+    The fixed descriptor avoids mutable Mojo globals. `send(2)` is the only
+    operation performed in the handler; normal control flow drains the byte.
+    """
+    var byte: UInt8 = UInt8(Int(sig))
+    _ = external_call[
+        "send", c_ssize_t,
+        c_int, Pointer[UInt8, origin_of(byte)], c_size_t, c_int,
+    ](SIGNAL_FD_W, Pointer(to=byte), c_size_t(1), MSG_DONTWAIT)
+
+
+def signal_replace_pipe() -> Bool:
+    """Install a fresh self-pipe on the signal handler's fixed descriptors.
+
+    A worker calls this immediately after `fork()` so it cannot feed the
+    parent's inherited socketpair. The write descriptor is replaced first:
+    a signal arriving between the two `dup2` calls lands in the new pair and
+    remains readable after the read descriptor is replaced.
+    """
+    var fds = List[c_int](capacity=2)
+    fds.append(c_int(-1))
+    fds.append(c_int(-1))
     var rc = external_call[
-        "sigemptyset", c_int, Pointer[UInt8, origin_of(signals)],
-    ](signals.unsafe_ptr())
+        "socketpair", c_int,
+        c_int, c_int, c_int, Pointer[c_int, origin_of(fds)],
+    ](AF_UNIX, SOCK_STREAM, c_int(0), fds.unsafe_ptr())
     if Int(rc) != 0:
         return False
-    rc = external_call[
-        "sigaddset", c_int, Pointer[UInt8, origin_of(signals)], c_int,
-    ](signals.unsafe_ptr(), c_int(SIGNAL_TERM))
-    if Int(rc) != 0:
+
+    var write_rc = external_call["dup2", c_int, c_int, c_int](
+        fds[1], SIGNAL_FD_W
+    )
+    if Int(write_rc) < 0:
+        socket_close(fds[0])
+        socket_close(fds[1])
         return False
-    rc = external_call[
-        "sigaddset", c_int, Pointer[UInt8, origin_of(signals)], c_int,
-    ](signals.unsafe_ptr(), c_int(SIGNAL_INT))
-    if Int(rc) != 0:
+    var read_rc = external_call["dup2", c_int, c_int, c_int](
+        fds[0], SIGNAL_FD_R
+    )
+    if fds[0] != SIGNAL_FD_R and fds[0] != SIGNAL_FD_W:
+        socket_close(fds[0])
+    if fds[1] != SIGNAL_FD_R and fds[1] != SIGNAL_FD_W:
+        socket_close(fds[1])
+    return Int(read_rc) >= 0
+
+
+def signal_install() -> Bool:
+    """Install process-wide SIGTERM/SIGINT handlers backed by a self-pipe."""
+    if not signal_replace_pipe():
         return False
-    rc = external_call[
-        "sigprocmask", c_int,
-        c_int,
-        Pointer[UInt8, origin_of(signals)],
-        Pointer[UInt8, origin_of(previous)],
-    ](_SIG_BLOCK, signals.unsafe_ptr(), previous.unsafe_ptr())
-    return Int(rc) == 0
+    var handler = baldr_on_signal
+    var previous = external_call["signal", Int, c_int, type_of(handler)](
+        c_int(SIGNAL_TERM), handler
+    )
+    if previous == -1:
+        return False
+    previous = external_call["signal", Int, c_int, type_of(handler)](
+        c_int(SIGNAL_INT), handler
+    )
+    return previous != -1
 
 
 def signal_pending() -> Bool:
-    """Return whether blocked SIGTERM or SIGINT is pending."""
-    var signals = _signal_set()
-    var rc = external_call[
-        "sigpending", c_int, Pointer[UInt8, origin_of(signals)],
-    ](signals.unsafe_ptr())
-    if Int(rc) != 0:
-        return False
-    var term = external_call[
-        "sigismember", c_int, Pointer[UInt8, origin_of(signals)], c_int,
-    ](signals.unsafe_ptr(), c_int(SIGNAL_TERM))
-    var interrupt = external_call[
-        "sigismember", c_int, Pointer[UInt8, origin_of(signals)], c_int,
-    ](signals.unsafe_ptr(), c_int(SIGNAL_INT))
-    return Int(term) == 1 or Int(interrupt) == 1
+    """Drain the process self-pipe and return whether any signal arrived."""
+    var pending = False
+    var byte: UInt8 = 0
+    while True:
+        var received = external_call[
+            "recv", c_ssize_t,
+            c_int, Pointer[UInt8, origin_of(byte)], c_size_t, c_int,
+        ](SIGNAL_FD_R, Pointer(to=byte), c_size_t(1), MSG_DONTWAIT)
+        if Int(received) <= 0:
+            return pending
+        pending = True
 
 
 def _find_header_end(buf: List[UInt8]) -> Int:

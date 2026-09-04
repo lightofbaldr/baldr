@@ -9,6 +9,7 @@ from baldr.app import App, DispatchHandler
 from baldr.http import (
     make_sockaddr_in,
     process_exit,
+    process_execv,
     process_fork,
     process_getpid,
     process_kill,
@@ -188,6 +189,13 @@ def _wait_children(pid: Int, count: Int, timeout_ms: Int = 4000) raises -> List[
     return _children(pid)
 
 
+def _thread_count(pid: Int) raises -> Int:
+    var task_dir = Path("/proc/" + String(pid) + "/task")
+    if not task_dir.is_dir():
+        return 0
+    return len(task_dir.listdir())
+
+
 def _has_new_pid(before: List[Int], after: List[Int]) -> Bool:
     for i in range(len(after)):
         var found = False
@@ -241,6 +249,43 @@ def _start_pool(port: Int, root: String, mode: Int, workers: Int, grace_secs: In
     return -1
 
 
+def _start_fresh_pool(port: Int, root: String) -> Int:
+    var pid = Int(process_fork())
+    if pid != 0:
+        return pid
+    var args = List[String](capacity=3)
+    args.append(String("build/test_supervision_pool_main"))
+    args.append(String(port))
+    args.append(root)
+    _ = process_execv(args)
+    process_exit(127)
+    return -1
+
+
+def _fresh_process_stop(root: String, port: Int) raises -> Bool:
+    var started_ns = perf_counter_ns()
+    var case_root = root + "/fresh-process"
+    makedirs(Path(case_root), exist_ok=True)
+    var pool = _start_fresh_pool(port, case_root)
+    var status: c_int = 0
+    var ready = _wait_ready(port)
+    var workers = _wait_children(pool, 2)
+    var threads = _thread_count(pool)
+    var signalled = process_kill(pool, SIGNAL_TERM)
+    var exited = _wait_exit(pool, 5000, status)
+    var stopped = Path(case_root + "/stopped").is_file()
+    var gone = _all_gone(workers)
+    var ok = ready and len(workers) == 2 and threads > 1 and signalled \
+        and exited and _exit_code(status) == 0 and stopped and gone
+    if not exited:
+        _force_stop(pool, status)
+    var elapsed_ms = (perf_counter_ns() - started_ns) // 1_000_000
+    print("[timing] fresh-process multithreaded stop:", elapsed_ms, "ms; threads:", threads)
+    if not ok:
+        print("[detail] fresh ready/workers/threads/signal/exit/code/stopped/gone:", ready, len(workers), threads, signalled, exited, _exit_code(status), stopped, gone)
+    return ok
+
+
 def _graceful_stop(root: String, port: Int) raises -> Bool:
     var started_ns = perf_counter_ns()
     var pool_root = root + "/graceful-pool"
@@ -257,7 +302,7 @@ def _graceful_stop(root: String, port: Int) raises -> Bool:
     if not exited:
         _force_stop(pool, status)
 
-    # The same blocked-signal accept polling must work without a supervisor.
+    # The same self-pipe polling must work without a supervisor.
     var single_root = root + "/graceful-single"
     makedirs(Path(single_root), exist_ok=True)
     var single = _start_pool(port + 1, single_root, MODE_ECHO, 1, 2)
@@ -377,10 +422,11 @@ def main() raises:
     makedirs(Path(root), exist_ok=True)
     var base_port = 30_000 + (pid % 15_000)
 
-    runner.check("graceful stop exits zero and reaps workers", _graceful_stop(root, base_port))
-    runner.check("SIGTERM drains the in-flight response", _drain(root, base_port + 2))
-    runner.check("a crashed worker is respawned and serves again", _respawn(root, base_port + 3))
-    runner.check("five rapid respawns trigger nonzero crash-loop shutdown", _crash_loop(root, base_port + 4))
+    runner.check("fresh multithreaded parent exits zero and reaps workers", _fresh_process_stop(root, base_port))
+    runner.check("graceful stop exits zero and reaps workers", _graceful_stop(root, base_port + 1))
+    runner.check("SIGTERM drains the in-flight response", _drain(root, base_port + 3))
+    runner.check("a crashed worker is respawned and serves again", _respawn(root, base_port + 4))
+    runner.check("five rapid respawns trigger nonzero crash-loop shutdown", _crash_loop(root, base_port + 5))
     runner.summary()
     if runner.failures > 0:
         raise Error("supervision test failures: " + String(runner.failures))

@@ -333,14 +333,16 @@ parent after shutdown and child reaping.
 
 ### Shutdown
 
-`run` blocks SIGTERM/SIGINT and polls for them between connections; it does not
-run Mojo code from an asynchronous signal handler. In prefork mode the parent
+`run` installs process-wide SIGTERM/SIGINT handlers. The handler only writes a
+byte with `send()` to a self-pipe; normal App code polls and drains that pipe
+between connections, so no request or lifecycle logic runs in signal context.
+Each prefork worker replaces the inherited pipe before serving. The parent
 signals every worker, waits up to `grace_secs`, kills only workers still alive,
 reaps them, calls `on_shutdown()`, closes the listener, and returns normally.
 Workers finish the connection they are currently serving before observing the
-pending signal. An unexpectedly exited worker is respawned with backoff; after
-5 respawns within 10 seconds the parent logs a crash-loop error, drains the
-pool, and exits non-zero. `workers=1` has the same signal and drain behavior.
+signal. An unexpectedly exited worker is respawned with backoff; after 5
+respawns within 10 seconds the parent logs a crash-loop error, drains the pool,
+and exits non-zero. `workers=1` has the same signal and drain behavior.
 
 ```mojo
 var app = App(middleware=Chain((SecurityHeaders(), RequestLogger())), errors=JsonErrorHandler())

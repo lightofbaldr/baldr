@@ -100,9 +100,10 @@ served by baldr-prefork (pid 40116)
 
 Four one-second requests, ~1 second wall-clock total instead of ~4. The `pid` in each reply is the worker that served it — proof the kernel spread the load. A fifth concurrent request would queue behind whichever worker frees up first, because each worker still runs a **serial** accept loop internally.
 
-To stop the pool, send SIGTERM or press Ctrl-C. The signal is blocked rather
-than handled asynchronously: the parent polls for it, asks every worker to
-stop, and workers finish their current connection before exiting.
+To stop the pool, send SIGTERM or press Ctrl-C. A process-wide handler performs
+one async-signal-safe `send()` into a self-pipe; normal App code polls that pipe,
+asks every worker to stop, and workers finish their current connection before
+exiting. No application or lifecycle callback runs in signal context.
 
 ## Shutdown and worker supervision
 
@@ -112,16 +113,18 @@ after a short linear backoff. 5 respawns inside 10 seconds are treated as a
 crash loop: baldr logs `[baldr] worker crash loop; giving up`, drains the other
 workers, and exits non-zero instead of spinning forever.
 
-Workers inherit the parent's blocked signal mask. They check for shutdown only
-between connections, immediately after closing the client they just served.
-That means a response already in flight is allowed to finish. An idle worker's
-listening `accept()` wakes at least once per second, so it notices a pending
-signal without waiting for another client.
+Every worker replaces the parent's inherited self-pipe immediately after
+`fork()`. A worker-directed signal therefore reaches only that worker's pipe;
+the parent's pipe carries only parent-directed signals. Workers check for
+shutdown between connections, immediately after closing the client they just
+served. That means a response already in flight is allowed to finish. An idle
+worker's listening `accept()` wakes at least once per second, so it notices a
+pending signal without waiting for another client.
 
 The parent gives workers `grace_secs` (5 seconds by default) to drain. It sends
 SIGKILL only to workers still alive at that deadline, reaps every child, runs
 `lifecycle.on_shutdown()` once, closes the listening socket, and returns from
-`run` normally. `workers=1` uses the same blocked-signal polling and drain
+`run` normally. `workers=1` uses the same handler/self-pipe polling and drain
 semantics, without a supervisor process.
 
 ## The rule that comes with it: no shared mutable state

@@ -2,10 +2,10 @@
 
 Phase 2.8 — lifecycle. Lets an app initialize resources (DB connections,
 warm caches, build the asset manifest) before serving and drain them on
-exit. `App.run` blocks SIGTERM/SIGINT and polls at safe boundaries instead
-of invoking Mojo from an asynchronous C callback. `on_startup` runs once in
-the parent; after worker drain and reap, `on_shutdown` runs once in the
-parent before `run` returns normally.
+exit. `App.run` catches SIGTERM/SIGINT process-wide with a minimal C-ABI
+handler that writes one byte to a self-pipe; App logic polls that pipe only
+at safe boundaries. `on_startup` runs once in the parent; after worker drain
+and reap, `on_shutdown` runs once in the parent before `run` returns normally.
 """
 
 
