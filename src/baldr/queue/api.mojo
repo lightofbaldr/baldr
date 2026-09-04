@@ -35,7 +35,7 @@ comptime BACKEND_CPU: Int = 0
 comptime BACKEND_GPU: Int = 1
 
 
-struct Queue(Movable, ImplicitlyDestructible):
+struct Queue(Movable, Deinitable):
     """Backend-agnostic storage. Holds a `CpuQueue` *or* a `GpuQueue`,
     never both — the other slot is `None`. Not Copyable — the GPU
     backend owns a `DeviceBuffer` and a dlopen handle that have

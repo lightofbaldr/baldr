@@ -42,15 +42,15 @@ def _setenv(name: String, value: String):
     var n = _to_cstring(name)
     var v = _to_cstring(value)
     _ = external_call["setenv", c_int](
-        n.unsafe_ptr().bitcast[Int8](),
-        v.unsafe_ptr().bitcast[Int8](),
+        n.unsafe_ptr().unsafe_bitcast[Int8](),
+        v.unsafe_ptr().unsafe_bitcast[Int8](),
         c_int(1),
     )
 
 
 def _unsetenv(name: String):
     var n = _to_cstring(name)
-    _ = external_call["unsetenv", c_int](n.unsafe_ptr().bitcast[Int8]())
+    _ = external_call["unsetenv", c_int](n.unsafe_ptr().unsafe_bitcast[Int8]())
 
 
 def _bytes_to_str(b: List[UInt8]) -> String:
@@ -104,7 +104,7 @@ def test_local_gpu_works_or_raises(mut r: Runner) raises:
     cleanly. We don't pin the failure shape — different hosts give
     different libcuda errors."""
     _setenv(String("BALDR_QUEUE_BACKEND"), String("gpu"))
-    var got = String("?")
+    var got: String
     try:
         var q = Queue.local()
         got = q.backend_name()

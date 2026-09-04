@@ -43,7 +43,7 @@ from .response import Response
 from .serve import safe_join
 
 
-trait DispatchHandler(Movable, ImplicitlyDestructible):
+trait DispatchHandler(Movable, Deinitable):
     """A request dispatcher. Conform a struct to this trait, hand the
     instance to `App.run()`, and the accept loop will call
     `__call__(req)` on each incoming request. The mutable `self`

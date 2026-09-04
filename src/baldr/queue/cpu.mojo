@@ -10,7 +10,6 @@ pointer advances on POP — list isn't resized so POP stays O(1).
 """
 
 from std.collections import Dict
-from std.memory import UnsafePointer
 
 
 # ── Records ───────────────────────────────────────────────────────────────
@@ -70,7 +69,7 @@ def _scan_simd(
     var first_vec = SIMD[DType.uint8, SCAN_WIDTH](first)
     var i: Int = 0
     while i + SCAN_WIDTH <= last_start + 1:
-        var block = (data_ptr + i).load[width=SCAN_WIDTH]()
+        var block = data_ptr.unsafe_offset(i).unsafe_load[width=SCAN_WIDTH]()
         var eq = block.eq(first_vec)
         if eq.reduce_or():
             # At least one lane matched. Verify each lane scalarly.

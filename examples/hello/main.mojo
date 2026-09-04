@@ -1,4 +1,4 @@
-"""baldr — hello example.
+"""Baldr — hello example.
 
 The README quickstart, end-to-end. Demonstrates:
 

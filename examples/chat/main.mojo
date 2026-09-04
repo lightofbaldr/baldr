@@ -1,4 +1,4 @@
-"""baldr — chat example.
+"""Baldr — chat example.
 
 Single-pane chat with auto-escaping HTML via `baldr.Templates`. State
 lives in the dispatcher struct (`ChatApp`) between requests — the

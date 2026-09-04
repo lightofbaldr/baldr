@@ -1,4 +1,4 @@
-"""baldr — scan example.
+"""Baldr — scan example.
 
 Loads a synthetic corpus into a `CpuQueue` and exposes a one-route
 JSON endpoint that runs `find_str(needle)` with timing. Demonstrates

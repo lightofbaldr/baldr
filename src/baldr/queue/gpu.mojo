@@ -60,7 +60,6 @@ from std.collections import Dict
 from std.ffi import OwnedDLHandle, c_int, c_size_t, external_call
 from std.time import perf_counter_ns
 from max.gpu.host import DeviceContext, DeviceBuffer
-from std.memory import UnsafePointer
 from std.os.env import getenv
 
 
@@ -83,8 +82,8 @@ comptime READ_BUFFER_SIZE: Int = 65536
 comptime CUdeviceptr = UInt64
 comptime CUresult = Int32
 
-comptime HtoDFn = def (CUdeviceptr, UnsafePointer[UInt8, MutAnyOrigin], c_size_t) thin abi("C") -> CUresult
-comptime DtoHFn = def (UnsafePointer[UInt8, MutAnyOrigin], CUdeviceptr, c_size_t) thin abi("C") -> CUresult
+comptime HtoDFn = def (CUdeviceptr, Pointer[UInt8, MutAnyOrigin], c_size_t) thin abi("C") -> CUresult
+comptime DtoHFn = def (Pointer[UInt8, MutAnyOrigin], CUdeviceptr, c_size_t) thin abi("C") -> CUresult
 
 
 # ── Socket primitives (the mojo-http vintage) ───────────────────────────
@@ -99,8 +98,8 @@ def socket_reuseaddr(fd: c_int) -> Bool:
     var rc = external_call[
         "setsockopt", c_int,
         c_int, c_int, c_int,
-        UnsafePointer[c_int, origin_of(one)], c_int,
-    ](fd, SOL_SOCKET, SO_REUSEADDR, UnsafePointer(to=one), c_int(4))
+        Pointer[c_int, origin_of(one)], c_int,
+    ](fd, SOL_SOCKET, SO_REUSEADDR, Pointer(to=one), c_int(4))
     return Int(rc) == 0
 
 
@@ -117,7 +116,7 @@ def make_sockaddr_in(port: Int) -> List[UInt8]:
 def socket_bind(fd: c_int, mut addr: List[UInt8]) -> Bool:
     var rc = external_call[
         "bind", c_int,
-        c_int, UnsafePointer[UInt8, origin_of(addr)], c_int,
+        c_int, Pointer[UInt8, origin_of(addr)], c_int,
     ](fd, addr.unsafe_ptr(), c_int(16))
     return Int(rc) == 0
 
@@ -136,8 +135,8 @@ def socket_accept(fd: c_int) -> c_int:
     return external_call[
         "accept", c_int,
         c_int,
-        UnsafePointer[UInt8, origin_of(peer_addr)],
-        UnsafePointer[UInt8, origin_of(peer_len)],
+        Pointer[UInt8, origin_of(peer_addr)],
+        Pointer[UInt8, origin_of(peer_len)],
     ](fd, peer_addr.unsafe_ptr(), peer_len.unsafe_ptr())
 
 
@@ -152,7 +151,7 @@ def recv_some(fd: c_int, mut buf: List[UInt8], max_bytes: Int) -> Int:
         tmp.append(0)
     var n = external_call[
         "recv", c_size_t,
-        c_int, UnsafePointer[UInt8, origin_of(tmp)], c_size_t, c_int,
+        c_int, Pointer[UInt8, origin_of(tmp)], c_size_t, c_int,
     ](fd, tmp.unsafe_ptr(), c_size_t(max_bytes), c_int(0))
     var got = Int(n)
     if got <= 0:
@@ -180,7 +179,7 @@ def send_all(fd: c_int, mut data: List[UInt8]):
     while total < n:
         var sent = external_call[
             "send", c_size_t,
-            c_int, UnsafePointer[UInt8, origin_of(data)], c_size_t, c_int,
+            c_int, Pointer[UInt8, origin_of(data)], c_size_t, c_int,
         ](fd, data.unsafe_ptr() + total, c_size_t(n - total), c_int(0))
         if Int(sent) <= 0:
             return
@@ -202,8 +201,8 @@ def send_str(fd: c_int, s: String):
 # level for a request/response server.
 
 def cuda_memcpy_h2d(ref cuda: OwnedDLHandle,
-                    dst_dev: UnsafePointer[UInt8, MutAnyOrigin],
-                    src_host: UnsafePointer[UInt8, MutAnyOrigin],
+                    dst_dev: Pointer[UInt8, MutAnyOrigin],
+                    src_host: Pointer[UInt8, MutAnyOrigin],
                     count: Int) raises -> Bool:
     """dev2026080106: resolve the symbol per call rather than holding a cached
     function pointer. `get_function` now returns a callable carrying an
@@ -216,8 +215,8 @@ def cuda_memcpy_h2d(ref cuda: OwnedDLHandle,
 
 
 def cuda_memcpy_d2h(ref cuda: OwnedDLHandle,
-                    dst_host: UnsafePointer[UInt8, MutAnyOrigin],
-                    src_dev: UnsafePointer[UInt8, MutAnyOrigin],
+                    dst_host: Pointer[UInt8, MutAnyOrigin],
+                    src_dev: Pointer[UInt8, MutAnyOrigin],
                     count: Int) raises -> Bool:
     """See `cuda_memcpy_h2d` — same per-call resolution rationale."""
     var dtoh = cuda.get_function[CUresult]("cuMemcpyDtoH_v2")
@@ -332,8 +331,8 @@ def slice_to_string(buf: List[UInt8], lo: Int, hi: Int) -> String:
 # ── Command handling ────────────────────────────────────────────────────
 def _gpu_write(
     mut state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
-    src: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
+    src: Pointer[UInt8, MutAnyOrigin],
     n: Int,
 ) -> Int:
     """Append `n` bytes to the device buffer; return the offset they
@@ -349,7 +348,7 @@ def _gpu_write(
 
 def _gpu_read(
     state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
     offset: Int,
     n: Int,
 ) -> Optional[List[UInt8]]:
@@ -364,7 +363,7 @@ def _gpu_read(
 def handle_push(
     client_fd: c_int,
     mut state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
     payload_len: Int,
     mut buf: List[UInt8],
     consumed_through: Int,
@@ -389,7 +388,7 @@ def handle_push(
 def handle_pop(
     client_fd: c_int,
     mut state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
 ):
     """`POP\\r\\n` — pull the head item back to host and ship it."""
     if state.q_head_idx >= len(state.q_records):
@@ -424,7 +423,7 @@ def handle_stats(client_fd: c_int, state: ServerState):
 def handle_bench_bandwidth(
     client_fd: c_int,
     state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
     size_bytes: Int,
 ):
     """`BENCH_BANDWIDTH <N>\\r\\n` — measure raw H2D + D2H throughput.
@@ -479,7 +478,7 @@ def handle_bench_bandwidth(
 def handle_set(
     client_fd: c_int,
     mut state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
     key: String,
     payload_len: Int,
     mut buf: List[UInt8],
@@ -506,7 +505,7 @@ def handle_set(
 def handle_get(
     client_fd: c_int,
     state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
     key: String,
 ) raises:
     """`GET <key>\\r\\n` → "$N\\r\\n<bytes>\\r\\n" or "$-1\\r\\n"."""
@@ -537,7 +536,7 @@ def handle_del(client_fd: c_int, mut state: ServerState, key: String) raises:
 def handle_tpush(
     client_fd: c_int,
     mut state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
     payload_len: Int,
     mut buf: List[UInt8],
     consumed_through: Int,
@@ -565,7 +564,7 @@ def handle_tpush(
 def handle_claim(
     client_fd: c_int,
     mut state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
 ) raises:
     """`CLAIM\\r\\n` — pick the oldest PENDING task, mark CLAIMED, send
     back "+OK <id> <N>\\r\\n<bytes>\\r\\n". $-1 if none available.
@@ -678,7 +677,7 @@ def _contains_needle(hay: List[UInt8], needle: List[UInt8]) -> Bool:
 def handle_find(
     client_fd: c_int,
     state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
     needle_len: Int,
     mut buf: List[UInt8],
     consumed_through: Int,
@@ -746,7 +745,7 @@ def handle_find(
 def handle_connection(
     client_fd: c_int,
     mut state: ServerState,
-    dev_base: UnsafePointer[UInt8, MutAnyOrigin],
+    dev_base: Pointer[UInt8, MutAnyOrigin],
 ) raises:
     """One TCP connection = one command for now.
 

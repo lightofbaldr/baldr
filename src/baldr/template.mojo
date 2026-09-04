@@ -590,7 +590,7 @@ def _eval_cmp(mut p: ExprParser, ctx: Value) raises -> Value:
     if p.pos + 1 < len(p.bs):
         c1 = p.bs[p.pos + 1]
 
-    var op = String()
+    var op: String
     if c0 == UInt8(61) and c1 == UInt8(61): op = "=="; p.pos += 2
     elif c0 == UInt8(33) and c1 == UInt8(61): op = "!="; p.pos += 2
     elif c0 == UInt8(60) and c1 == UInt8(61): op = "<="; p.pos += 2

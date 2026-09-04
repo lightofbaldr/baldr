@@ -96,7 +96,7 @@ def test_filters(mut r: Runner) raises:
     expect_eq(r, "upper", render_str("{{ name|upper }}", ctx), String("ADAM"))
     expect_eq(r, "lower", render_str("{{ name|lower }}", ctx), String("adam"))
     ctx.set("xs", Value.list_of())
-    ctx.get("xs")  # just to exercise get
+    _ = ctx.get("xs")  # just to exercise get
     var xs = Value.list_of()
     xs.push(Value.int_(1)); xs.push(Value.int_(2)); xs.push(Value.int_(3))
     ctx.set("xs", xs^)

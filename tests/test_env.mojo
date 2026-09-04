@@ -46,8 +46,8 @@ def _setenv(name: String, value: String):
     var n = _to_cstring(name)
     var v = _to_cstring(value)
     _ = external_call["setenv", c_int](
-        n.unsafe_ptr().bitcast[Int8](),
-        v.unsafe_ptr().bitcast[Int8](),
+        n.unsafe_ptr().unsafe_bitcast[Int8](),
+        v.unsafe_ptr().unsafe_bitcast[Int8](),
         c_int(1),
     )
 
@@ -55,7 +55,7 @@ def _setenv(name: String, value: String):
 def _unsetenv(name: String):
     var n = _to_cstring(name)
     _ = external_call["unsetenv", c_int](
-        n.unsafe_ptr().bitcast[Int8](),
+        n.unsafe_ptr().unsafe_bitcast[Int8](),
     )
 
 

@@ -1,4 +1,4 @@
-"""baldr bench — CPU backend microbenchmarks.
+"""Baldr bench — CPU backend microbenchmarks.
 
 Builds a synthetic corpus and measures:
   - CpuQueue.find_str throughput at 1 MB / 8 MB / 64 MB / 256 MB.

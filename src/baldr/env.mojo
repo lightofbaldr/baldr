@@ -155,7 +155,7 @@ def _setenv_cstr(name: String, value: String):
     for i in range(len(v_buf)):
         v_list.append(v_buf[i])
     _ = external_call["setenv", c_int](
-        n_list.unsafe_ptr().bitcast[Int8](),
-        v_list.unsafe_ptr().bitcast[Int8](),
+        n_list.unsafe_ptr().unsafe_bitcast[Int8](),
+        v_list.unsafe_ptr().unsafe_bitcast[Int8](),
         c_int(1),
     )

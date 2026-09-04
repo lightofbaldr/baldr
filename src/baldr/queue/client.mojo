@@ -10,7 +10,6 @@ through GPU memory on Spark 2's GB10.
 """
 
 from std.ffi import c_int, c_size_t, external_call
-from std.memory import UnsafePointer
 from std.os.env import getenv
 
 
@@ -67,7 +66,7 @@ def _connect(host: String, port: Int) -> c_int:
     addr[4] = ip[0]; addr[5] = ip[1]; addr[6] = ip[2]; addr[7] = ip[3]
     var rc = external_call[
         "connect", c_int,
-        c_int, UnsafePointer[UInt8, origin_of(addr)], c_int,
+        c_int, Pointer[UInt8, origin_of(addr)], c_int,
     ](fd, addr.unsafe_ptr(), c_int(16))
     if Int(rc) != 0:
         _ = external_call["close", c_int, c_int](fd)
@@ -81,8 +80,8 @@ def _send_all(fd: c_int, mut data: List[UInt8]):
     while total < n:
         var sent = external_call[
             "send", c_size_t,
-            c_int, UnsafePointer[UInt8, origin_of(data)], c_size_t, c_int,
-        ](fd, data.unsafe_ptr() + total, c_size_t(n - total), c_int(0))
+            c_int, Pointer[UInt8, origin_of(data)], c_size_t, c_int,
+        ](fd, data.unsafe_ptr().unsafe_offset(total), c_size_t(n - total), c_int(0))
         if Int(sent) <= 0:
             return
         total += Int(sent)
@@ -108,7 +107,7 @@ def _recv_all(fd: c_int) -> List[UInt8]:
     while True:
         var n = external_call[
             "recv", c_size_t,
-            c_int, UnsafePointer[UInt8, origin_of(buf)], c_size_t, c_int,
+            c_int, Pointer[UInt8, origin_of(buf)], c_size_t, c_int,
         ](fd, buf.unsafe_ptr(), c_size_t(65536), c_int(0))
         var got = Int(n)
         if got <= 0:

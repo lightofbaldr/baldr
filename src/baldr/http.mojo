@@ -18,7 +18,6 @@ Endpoints (this stub):
 """
 
 from std.ffi import c_int, c_size_t, external_call
-from std.memory import UnsafePointer
 from std.os.env import getenv
 
 
@@ -47,8 +46,8 @@ def socket_reuseaddr(fd: c_int) -> Bool:
     var rc = external_call[
         "setsockopt", c_int,
         c_int, c_int, c_int,
-        UnsafePointer[c_int, origin_of(one)], c_int,
-    ](fd, SOL_SOCKET, SO_REUSEADDR, UnsafePointer(to=one), c_int(4))
+        Pointer[c_int, origin_of(one)], c_int,
+    ](fd, SOL_SOCKET, SO_REUSEADDR, Pointer(to=one), c_int(4))
     return Int(rc) == 0
 
 
@@ -73,7 +72,7 @@ def make_sockaddr_in(port: Int) -> List[UInt8]:
 def socket_bind(fd: c_int, mut addr: List[UInt8]) -> Bool:
     var rc = external_call[
         "bind", c_int,
-        c_int, UnsafePointer[UInt8, origin_of(addr)], c_int,
+        c_int, Pointer[UInt8, origin_of(addr)], c_int,
     ](fd, addr.unsafe_ptr(), c_int(16))
     return Int(rc) == 0
 
@@ -93,8 +92,8 @@ def socket_accept(fd: c_int) -> c_int:
     return external_call[
         "accept", c_int,
         c_int,
-        UnsafePointer[UInt8, origin_of(peer_addr)],
-        UnsafePointer[UInt8, origin_of(peer_len)],
+        Pointer[UInt8, origin_of(peer_addr)],
+        Pointer[UInt8, origin_of(peer_len)],
     ](fd, peer_addr.unsafe_ptr(), peer_len.unsafe_ptr())
 
 
@@ -166,7 +165,7 @@ def read_request(fd: c_int) -> List[UInt8]:
     while True:
         var n = external_call[
             "recv", c_size_t,
-            c_int, UnsafePointer[UInt8, origin_of(buf)], c_size_t, c_int,
+            c_int, Pointer[UInt8, origin_of(buf)], c_size_t, c_int,
         ](fd, buf.unsafe_ptr(), c_size_t(READ_BUFFER_SIZE), c_int(0))
         var got = Int(n)
         if got <= 0:
@@ -198,8 +197,8 @@ def write_all(fd: c_int, mut data: List[UInt8]) -> None:
     while total < n:
         var sent = external_call[
             "send", c_size_t,
-            c_int, UnsafePointer[UInt8, origin_of(data)], c_size_t, c_int,
-        ](fd, data.unsafe_ptr() + total, c_size_t(n - total), c_int(0))
+            c_int, Pointer[UInt8, origin_of(data)], c_size_t, c_int,
+        ](fd, data.unsafe_ptr().unsafe_offset(total), c_size_t(n - total), c_int(0))
         if Int(sent) <= 0:
             return
         total += Int(sent)

@@ -17,7 +17,6 @@ multiple handler threads must guard their own access.
 from std.collections import Dict
 from std.ffi import OwnedDLHandle, c_size_t
 from max.gpu.host import DeviceContext, DeviceBuffer
-from std.memory import UnsafePointer
 
 from .cpu import Match
 from .gpu import (
@@ -28,7 +27,7 @@ from .gpu import (
 )
 
 
-struct GpuQueue(Movable, ImplicitlyDeletable):
+struct GpuQueue(Movable, Deinitable):
     """Single-process GPU-backed Queue / KV / Tasks store with the
     same method surface as `CpuQueue`."""
     var capacity: Int
@@ -92,7 +91,7 @@ struct GpuQueue(Movable, ImplicitlyDeletable):
         self.dev_buf = dev_buf^
 
     # ── Device base pointer ───────────────────────────────────────────────
-    def _base(self) -> UnsafePointer[UInt8, ImmutAnyOrigin]:
+    def _base(self) -> Pointer[UInt8, ImmutAnyOrigin]:
         """Device buffer base pointer, derived on demand. Not cached in a
         field: the 2026-07 nightly forbids struct fields exposing AnyOrigin.
 
@@ -105,10 +104,10 @@ struct GpuQueue(Movable, ImplicitlyDeletable):
         the actual device write is performed by cuMemcpyHtoD_v2, not through
         this pointer.
         """
-        return self.dev_buf.unsafe_ptr().bitcast[UInt8]().as_unsafe_any_origin()
+        return self.dev_buf.unsafe_ptr().unsafe_bitcast[UInt8]().as_unsafe_any_origin()
 
     # ── Internal allocator ────────────────────────────────────────────────
-    def _write_bytes(mut self, src: UnsafePointer[UInt8, MutAnyOrigin], n: Int) raises -> Int:
+    def _write_bytes(mut self, src: Pointer[UInt8, MutAnyOrigin], n: Int) raises -> Int:
         """Append `n` host bytes to the device buffer; return the
         offset where they landed. Raises on capacity exhaustion or
         a memcpy failure."""
@@ -121,7 +120,7 @@ struct GpuQueue(Movable, ImplicitlyDeletable):
         var dst_offset = self.tail
         var htod = self.cuda.get_function[CUresult]("cuMemcpyHtoD_v2")
         var rc_w = htod(
-            CUdeviceptr(Int(self._base() + dst_offset)), src, c_size_t(n)
+            CUdeviceptr(Int(self._base().unsafe_offset(dst_offset))), src, c_size_t(n)
         )
         if Int(rc_w) != 0:
             raise Error(String("baldr.queue.gpu: cuMemcpyHtoD_v2 failed"))
@@ -136,7 +135,7 @@ struct GpuQueue(Movable, ImplicitlyDeletable):
         var dtoh = self.cuda.get_function[CUresult]("cuMemcpyDtoH_v2")
         var rc_r = dtoh(
             stage.unsafe_ptr().as_unsafe_any_origin(),
-            CUdeviceptr(Int(self._base() + rec.offset)),
+            CUdeviceptr(Int(self._base().unsafe_offset(rec.offset))),
             c_size_t(rec.length),
         )
         if Int(rc_r) != 0:
@@ -271,7 +270,7 @@ def _scan_host(
 
     var i: Int = 0
     while i + _SCAN_WIDTH <= last_start + 1:
-        var block = (ptr + i).load[width=_SCAN_WIDTH]()
+        var block = ptr.unsafe_offset(i).unsafe_load[width=_SCAN_WIDTH]()
         var eq = block.eq(first_vec)
         if eq.reduce_or():
             for lane in range(_SCAN_WIDTH):
