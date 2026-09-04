@@ -16,6 +16,7 @@ test-api       = "mkdir -p build && mojo build tests/test_api.mojo       -I src 
 test-queue-cpu = "mkdir -p build && mojo build tests/test_queue_cpu.mojo -I src -o build/test_queue_cpu && build/test_queue_cpu"
 test-middleware = "mkdir -p build && mojo build tests/test_middleware.mojo -I src -o build/test_middleware && build/test_middleware"
 test-env       = "mkdir -p build && mojo build tests/test_env.mojo       -I src -o build/test_env       && build/test_env"
+test-db        = "mkdir -p build && mojo build tests/test_db.mojo        -I src -o build/test_db        && build/test_db"
 test-queue-api = "mkdir -p build && mojo build tests/test_queue_api.mojo -I src -o build/test_queue_api && build/test_queue_api"
 test-router   = "mkdir -p build && mojo build tests/test_router.mojo   -I src -o build/test_router   && build/test_router"
 test-mw-chain = "mkdir -p build && mojo build tests/test_middleware_chain.mojo -I src -o build/test_mw_chain && build/test_mw_chain"
@@ -33,7 +34,7 @@ test-request-framing = "mkdir -p build && mojo build tests/test_request_framing.
 test-peer-ip = "mkdir -p build && mojo build tests/test_peer_ip.mojo -I src -o build/test_peer_ip && build/test_peer_ip"
 test-template-guard = "mkdir -p build && mojo build tests/test_template_guard.mojo -I src -o build/test_template_guard && build/test_template_guard"
 test-redirect-guard = "mkdir -p build && mojo build tests/test_redirect_guard.mojo -I src -o build/test_redirect_guard && build/test_redirect_guard"
-test = { depends-on = ["test-imports", "test-template", "test-json", "test-api", "test-queue-cpu", "test-middleware", "test-env", "test-queue-api", "test-router", "test-mw-chain", "test-cookies", "test-validation", "test-template-v2", "test-template-include", "test-assets", "test-config-errors", "test-testing-lifecycle", "test-concurrency", "test-safe-join", "test-http-limits", "test-request-framing", "test-peer-ip", "test-template-guard", "test-redirect-guard"] }
+test = { depends-on = ["test-imports", "test-template", "test-json", "test-api", "test-queue-cpu", "test-middleware", "test-env", "test-db", "test-queue-api", "test-router", "test-mw-chain", "test-cookies", "test-validation", "test-template-v2", "test-template-include", "test-assets", "test-config-errors", "test-testing-lifecycle", "test-concurrency", "test-safe-join", "test-http-limits", "test-request-framing", "test-peer-ip", "test-template-guard", "test-redirect-guard"] }
 
 example-hello = "mkdir -p build && mojo build examples/hello/main.mojo -I src -o build/example-hello"
 example-chat  = "mkdir -p build && mojo build examples/chat/main.mojo  -I src -o build/example-chat"
@@ -41,7 +42,8 @@ example-scan  = "mkdir -p build && mojo build examples/scan/main.mojo  -I src -o
 example-route = "mkdir -p build && mojo build examples/route/main.mojo -I src -o build/example-route"
 example-middleware = "mkdir -p build && mojo build examples/middleware/main.mojo -I src -o build/example-middleware"
 example-concurrency = "mkdir -p build && mojo build examples/concurrency/main.mojo -I src -o build/example-concurrency"
-examples = { depends-on = ["example-hello", "example-chat", "example-scan", "example-route", "example-middleware", "example-concurrency"] }
+example-db = "mkdir -p build && mojo build examples/db/main.mojo -I src -o build/example-db"
+examples = { depends-on = ["example-hello", "example-chat", "example-scan", "example-route", "example-middleware", "example-concurrency", "example-db"] }
 
 bench-cpu = "mkdir -p build && mojo build bench/bench_cpu.mojo -I src -o build/bench-cpu && build/bench-cpu"
 

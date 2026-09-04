@@ -22,6 +22,7 @@ Public API as of Phase 5:
   from baldr.template   import Value
   from baldr.json       import JsonValue, parse, dumps
   from baldr.env        import env_str, env_int, env_bool
+  from baldr.db         import Db, Row
   from baldr.queue.cpu  import CpuQueue, Match
 from baldr.middleware.security_headers import apply_security_headers
 from baldr.middleware.ratelimit        import RateLimit, make_429
