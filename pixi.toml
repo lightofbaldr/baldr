@@ -9,23 +9,23 @@ license = "Apache-2.0"
 
 [tasks]
 # Phase 1 — vendored module tests. Phase 2+ adds an `app` build target.
-test-imports   = "mojo build tests/test_imports.mojo   -I src -o build/test_imports   && build/test_imports"
-test-template  = "mojo build tests/test_template.mojo  -I src -o build/test_template  && build/test_template"
-test-json      = "mojo build tests/test_json.mojo      -I src -o build/test_json      && build/test_json"
-test-api       = "mojo build tests/test_api.mojo       -I src -o build/test_api       && build/test_api"
-test-queue-cpu = "mojo build tests/test_queue_cpu.mojo -I src -o build/test_queue_cpu && build/test_queue_cpu"
-test-middleware = "mojo build tests/test_middleware.mojo -I src -o build/test_middleware && build/test_middleware"
-test-env       = "mojo build tests/test_env.mojo       -I src -o build/test_env       && build/test_env"
-test-queue-api = "mojo build tests/test_queue_api.mojo -I src -o build/test_queue_api && build/test_queue_api"
-test-queue-gpu = "mojo build tests/test_queue_gpu.mojo -I src -o build/test_queue_gpu && build/test_queue_gpu"
+test-imports   = "mkdir -p build && mojo build tests/test_imports.mojo   -I src -o build/test_imports   && build/test_imports"
+test-template  = "mkdir -p build && mojo build tests/test_template.mojo  -I src -o build/test_template  && build/test_template"
+test-json      = "mkdir -p build && mojo build tests/test_json.mojo      -I src -o build/test_json      && build/test_json"
+test-api       = "mkdir -p build && mojo build tests/test_api.mojo       -I src -o build/test_api       && build/test_api"
+test-queue-cpu = "mkdir -p build && mojo build tests/test_queue_cpu.mojo -I src -o build/test_queue_cpu && build/test_queue_cpu"
+test-middleware = "mkdir -p build && mojo build tests/test_middleware.mojo -I src -o build/test_middleware && build/test_middleware"
+test-env       = "mkdir -p build && mojo build tests/test_env.mojo       -I src -o build/test_env       && build/test_env"
+test-queue-api = "mkdir -p build && mojo build tests/test_queue_api.mojo -I src -o build/test_queue_api && build/test_queue_api"
+test-queue-gpu = "mkdir -p build && mojo build tests/test_queue_gpu.mojo -I src -o build/test_queue_gpu && build/test_queue_gpu"
 test = { depends-on = ["test-imports", "test-template", "test-json", "test-api", "test-queue-cpu", "test-middleware", "test-env", "test-queue-api", "test-queue-gpu"] }
 
-example-hello = "mojo build examples/hello/main.mojo -I src -o build/example-hello"
-example-chat  = "mojo build examples/chat/main.mojo  -I src -o build/example-chat"
-example-scan  = "mojo build examples/scan/main.mojo  -I src -o build/example-scan"
+example-hello = "mkdir -p build && mojo build examples/hello/main.mojo -I src -o build/example-hello"
+example-chat  = "mkdir -p build && mojo build examples/chat/main.mojo  -I src -o build/example-chat"
+example-scan  = "mkdir -p build && mojo build examples/scan/main.mojo  -I src -o build/example-scan"
 examples = { depends-on = ["example-hello", "example-chat", "example-scan"] }
 
-bench-cpu = "mojo build bench/bench_cpu.mojo -I src -o build/bench-cpu && build/bench-cpu"
+bench-cpu = "mkdir -p build && mojo build bench/bench_cpu.mojo -I src -o build/bench-cpu && build/bench-cpu"
 
 build = "echo 'phase 5 — examples; `pixi run examples` builds all three under build/'"
 
