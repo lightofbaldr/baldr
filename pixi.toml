@@ -17,8 +17,7 @@ test-queue-cpu = "mkdir -p build && mojo build tests/test_queue_cpu.mojo -I src 
 test-middleware = "mkdir -p build && mojo build tests/test_middleware.mojo -I src -o build/test_middleware && build/test_middleware"
 test-env       = "mkdir -p build && mojo build tests/test_env.mojo       -I src -o build/test_env       && build/test_env"
 test-queue-api = "mkdir -p build && mojo build tests/test_queue_api.mojo -I src -o build/test_queue_api && build/test_queue_api"
-test-queue-gpu = "mkdir -p build && mojo build tests/test_queue_gpu.mojo -I src -o build/test_queue_gpu && build/test_queue_gpu"
-test = { depends-on = ["test-imports", "test-template", "test-json", "test-api", "test-queue-cpu", "test-middleware", "test-env", "test-queue-api", "test-queue-gpu"] }
+test = { depends-on = ["test-imports", "test-template", "test-json", "test-api", "test-queue-cpu", "test-middleware", "test-env", "test-queue-api"] }
 
 example-hello = "mkdir -p build && mojo build examples/hello/main.mojo -I src -o build/example-hello"
 example-chat  = "mkdir -p build && mojo build examples/chat/main.mojo  -I src -o build/example-chat"

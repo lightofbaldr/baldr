@@ -3,6 +3,36 @@
 All versions are `0.1.0-alpha.*` until the v0.1 release.
 Newest entries first.
 
+## Mojo 1.0.0 stable + the GPU split (2026-09-04)
+
+- **Toolchain:** pinned `mojo==1.0.0` / `max==26.5.0` on the
+  `conda.modular.com/max` release channel (was a May 1.0.0b2 nightly).
+  Baseline 236/236 before the bump, 236/236 after, 0 warnings.
+- **Port (five compile classes):** recursive structs (`template.Value`,
+  `template.Node`, `JsonValue`) declare `Deinitable` with an explicit
+  `__deinit__` under 1.0's conditional `Deinitable`; no aliasing of a
+  slice source with its construction target (leading-`/` strip in
+  `app`/`serve`); explicit `UInt(perf_counter_ns())` at the logger
+  boundary; dlopen callables borrow-checked and struct fields may not
+  expose `AnyOrigin` (GPU files, since removed); `DeviceContext`/
+  `DeviceBuffer` import from `max.gpu.host`.
+- **Deprecations cleared:** `UnsafePointer`→`Pointer`, `bitcast`→
+  `unsafe_bitcast`, `ptr + n`→`unsafe_offset`, `load`→`unsafe_load`,
+  `ImplicitlyDestructible`/`ImplicitlyDeletable`→`Deinitable`.
+- **The `test_queue_api` hang (open since August) diagnosed:** Mojo
+  destroys struct fields in declaration order; the GPU queue declared its
+  `DeviceContext` before the `DeviceBuffer` it owned, so the next context
+  in the same process deadlocked in the driver. Fixed by field order + an
+  explicit `__deinit__` (the fix ships with the backend, below).
+- **GPU split:** `baldr.queue.gpu` / `gpu_store` and `tests/test_queue_gpu`
+  move out to `mojo-gpuq` (Adam's 2026-08-03 call: a web server aims for
+  CPU; GPU tasks are subsystems). `baldr.queue.Queue` stays as the facade
+  over the single in-process backend: `BALDR_QUEUE_BACKEND=auto` resolves
+  to `cpu`, `gpu` raises with a pointer to `mojo-gpuq`. baldr has no CUDA
+  surface at all now. Suite: **224 / 224 over 8 suites**, 0 warnings.
+- **DX:** every compile task creates `build/` first, so a fresh clone can
+  run `pixi run test`.
+
 ## Post-Phase-6 (2026-05-18)
 
 - Queue / CpuQueue / GpuQueue: `capacity()`, `tail()`, `queue_bytes()`,

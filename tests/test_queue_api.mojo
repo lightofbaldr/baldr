@@ -83,12 +83,12 @@ def test_local_explicit_cpu(mut r: Runner) raises:
 
 
 def test_local_auto_always_succeeds(mut r: Runner) raises:
-    """`auto` returns gpu when libcuda is available, cpu otherwise.
+    """`auto` resolves to cpu — the only in-process backend baldr ships.
     Either way the call succeeds."""
     _setenv(String("BALDR_QUEUE_BACKEND"), String("auto"))
     var q = Queue.local()
     var name = q.backend_name()
-    r.check(String("auto -> cpu or gpu"), name == "cpu" or name == "gpu")
+    r.check(String("auto -> cpu"), name == "cpu")
     _unsetenv(String("BALDR_QUEUE_BACKEND"))
 
 
@@ -99,18 +99,17 @@ def test_local_case_insensitive(mut r: Runner) raises:
     _unsetenv(String("BALDR_QUEUE_BACKEND"))
 
 
-def test_local_gpu_works_or_raises(mut r: Runner) raises:
-    """`gpu` either succeeds (libcuda + a device available) or raises
-    cleanly. We don't pin the failure shape — different hosts give
-    different libcuda errors."""
+def test_local_gpu_raises_with_pointer(mut r: Runner) raises:
+    """`gpu` MUST raise since 2026-08-03: the in-process GPU backend moved
+    to mojo-gpuq. A web framework does not need device memory for queue
+    storage. Deterministic now — no libcuda, no device, no host variance."""
     _setenv(String("BALDR_QUEUE_BACKEND"), String("gpu"))
-    var got: String
+    var raised = False
     try:
-        var q = Queue.local()
-        got = q.backend_name()
+        _ = Queue.local()
     except:
-        got = String("raised")
-    r.check(String("gpu -> gpu | raised"), got == "gpu" or got == "raised")
+        raised = True
+    r.check(String("gpu -> raises (moved to mojo-gpuq)"), raised)
     _unsetenv(String("BALDR_QUEUE_BACKEND"))
 
 
@@ -171,7 +170,7 @@ def main() raises:
     test_local_explicit_cpu(r)
     test_local_auto_always_succeeds(r)
     test_local_case_insensitive(r)
-    test_local_gpu_works_or_raises(r)
+    test_local_gpu_raises_with_pointer(r)
     test_local_unknown_raises(r)
 
     test_queue_push_pop(r)

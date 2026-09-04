@@ -53,8 +53,8 @@ based.
 | Routing, static files, safe path joins | `baldr.serve` + `baldr.app` | URL → handler dispatch, `/static/` serving |
 | HTML rendering, auto-escape | `baldr.template` + `baldr.templates` | Jinja2-shaped expressions, filters, file-system discovery |
 | JSON in / out | `baldr.json` | RFC 8259 parser + emitter |
-| Persistent state | `baldr.queue.cpu` + `baldr.queue.gpu` | Queue + KV + Tasks, SIMD substring scan, GPU-resident fallback |
-| GPU memory cap shim (optional) | `mojo-cudart-shim` (separate repo) | LD_PRELOAD interposer for unified-memory hosts |
+| Persistent state | `baldr.queue.cpu` (+ `baldr.queue.Queue` facade) | Queue + KV + Tasks, SIMD substring scan, in-process, CPU-resident |
+| GPU-resident queue (optional) | `mojo-gpuq` (separate repo) | the former `baldr.queue.gpu` backend, as its own service |
 | Middleware | `baldr.middleware.*` | security_headers, ratelimit, logger |
 
 ## Examples
@@ -94,7 +94,7 @@ The same source compiles for `linux-aarch64` and `linux-64`.
 ## Docs
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — contributor guide, design tradeoffs, Mojo 1.0 quirks.
-- [`docs/PERF.md`](docs/PERF.md) — measured CPU/GPU/HTTP numbers on Spark 2.
+- [`docs/PERF.md`](docs/PERF.md) — measured CPU/HTTP numbers on Spark 2 (GPU numbers are historical; that backend lives in `mojo-gpuq`).
 - [`CHANGELOG.md`](CHANGELOG.md) — reverse-chrono record of every shipped change.
 
 ## License

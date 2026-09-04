@@ -60,10 +60,10 @@ load generator would show much higher throughput — v0.1 closes the
 socket on every response (`Connection: close`); keep-alive is in scope
 for v0.2.
 
-## GPU backend
+## GPU backend (historical — moved to `mojo-gpuq` on 2026-09-04)
 
-The vendored `baldr.queue.gpu` backend is the same code as
-`mojo-gpuq`; previously-measured peak throughput on Spark 2's GB10
+The formerly vendored `baldr.queue.gpu` backend is the same code as
+`mojo-gpuq`, which is where it now lives and is measured; previously-measured peak throughput on Spark 2's GB10
 (via `cuMemcpyHtoD_v2` from `cuda.so`) was **~12 GB/s push** and
 similar pull on 64 KiB payloads. Substring search across GPU memory
 isn't a CUDA-kernel yet (host-side scan over device-pulled bytes);

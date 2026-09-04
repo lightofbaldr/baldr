@@ -375,7 +375,9 @@ def directory_listing_html(rel_path: String, entries: List[Path]) -> String:
         # Path objects render as full paths — pluck just the basename.
         var slash = name.rfind("/")
         if slash >= 0:
-            name = String(name[byte=slash + 1:])
+            # dev2026080106 aliasing rule: materialise before self-assign.
+            var _name_s = String(name[byte=slash + 1:])
+            name = _name_s^
         if name.byte_length() == 0:
             continue
         if entry.is_dir():

@@ -194,7 +194,9 @@ def gpuq_tasks() -> List[String]:
         if nl < 0:
             break
         out.append(String(rest[byte=:nl]))
-        rest = String(rest[byte=nl + 2:])
+        # dev2026080106 aliasing rule: materialise before self-assign.
+        var _rest_s = String(rest[byte=nl + 2:])
+        rest = _rest_s^
     return out^
 
 

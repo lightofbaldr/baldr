@@ -116,10 +116,11 @@ struct KVRecord:       var offset: Int ; var length: Int    (gpu.mojo)
 struct TaskRecord:     var offset, length, status: Int      (gpu.mojo)
 ```
 
-This is deliberate: a future `baldr.Queue` facade can pick the
-backend at construction time (`Queue.local()` → GPU if available, CPU
-otherwise) and dispatch through a shared trait without divergent
-record shapes. The trait isn't drawn yet — Phase 3 only shipped the
+This is deliberate: the `baldr.queue.Queue` facade picks the backend
+at construction time and dispatches through one method surface without
+divergent record shapes. Since 2026-09-04 baldr ships one in-process
+backend (CPU/SIMD); the GPU backend moved to `mojo-gpuq` and the facade
+is kept as the seam where an out-of-process client can reappear. The trait isn't drawn yet — Phase 3 only shipped the
 CPU side — but the symmetry means the facade is mostly plumbing when
 it's time.
 

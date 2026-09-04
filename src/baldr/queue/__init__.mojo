@@ -1,10 +1,11 @@
-"""baldr.queue — GPU and CPU backends behind one Queue/KV/Tasks API.
+"""baldr.queue — in-process CPU/SIMD storage behind one Queue/KV/Tasks API.
 
 Phase 3 shipped `CpuQueue`. Post-Phase-6 ships the public `Queue`
 facade in `api.mojo`, with env-driven backend selection via
-`BALDR_QUEUE_BACKEND`. The in-process GPU backend (extracted from
-the vendored TCP-server `gpu.mojo`) lands in v0.2; until then `gpu`
-storage is reachable via `Queue.remote()` against the TCP server.
+`BALDR_QUEUE_BACKEND`. The in-process GPU backend was REMOVED on
+2026-08-03 and lives in mojo-gpuq: a web framework does not need
+device memory for queue storage, and it carried baldr's only
+CUDA/dlopen surface. GPU work belongs in a subsystem over the wire.
 
     from baldr.queue import Queue, CpuQueue, Match
 """
