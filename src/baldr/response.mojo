@@ -76,10 +76,9 @@ struct Response(Copyable, Movable):
         """Build a Server-Sent Events response (`text/event-stream`).
 
         Each string in `events` is rendered as one SSE event (`data: ...\\n\\n`).
-        baldr uses `Connection: close`, so the full event stream is sent at once
-        rather than kept open; this is fine for finite event feeds and keeps the
-        transport unchanged. For long-lived streaming, the transport layer
-        (http.mojo) would need keep-alive + chunked writes (planned)."""
+        This constructor remains useful for finite event feeds rendered into a
+        normal response body. For a long-lived feed, use
+        `baldr.streaming.ResponseStream` for chunked, immediate writes."""
         var body = String()
         for i in range(len(events)):
             var ev = events[i]

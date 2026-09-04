@@ -17,15 +17,18 @@ Endpoints (this stub):
     *             -> 404 {"error":"not found"}
 """
 
-from std.ffi import c_int, c_size_t, external_call
+from std.ffi import c_int, c_size_t, c_ssize_t, external_call
 from std.os.env import getenv
+from .request import Request
 
 
 # C constants for AF_INET sockets (POSIX).
 comptime AF_INET: c_int = 2
+comptime AF_UNIX: c_int = 1
 comptime SOCK_STREAM: c_int = 1
 comptime SOL_SOCKET: c_int = 1
 comptime SO_REUSEADDR: c_int = 2
+comptime MSG_DONTWAIT: c_int = 0x40                  # Linux recv(2) flag
 
 comptime DEFAULT_PORT: Int = 8090
 comptime LISTEN_BACKLOG: c_int = 16
@@ -123,6 +126,68 @@ def socket_accept(fd: c_int) -> c_int:
 
 def socket_close(fd: c_int) -> None:
     _ = external_call["close", c_int, c_int](fd)
+
+
+def socket_pair() raises -> Tuple[c_int, c_int]:
+    """Create a connected AF_UNIX stream-socket pair for transport tests."""
+    var fds = List[c_int](capacity=2)
+    fds.append(c_int(-1))
+    fds.append(c_int(-1))
+    var rc = external_call[
+        "socketpair", c_int,
+        c_int, c_int, c_int, Pointer[c_int, origin_of(fds)],
+    ](AF_UNIX, SOCK_STREAM, c_int(0), fds.unsafe_ptr())
+    if Int(rc) != 0:
+        raise Error("baldr: socketpair() failed")
+    return (fds[0], fds[1])
+
+
+def recv_available(fd: c_int, max_bytes: Int) -> List[UInt8]:
+    """Receive at most `max_bytes` in one `recv(2)` call.
+
+    This small helper is intended for socket-level tests after the writer has
+    already produced bytes; it does not poll, block, or accumulate.
+    """
+    var out = List[UInt8]()
+    if max_bytes <= 0:
+        return out^
+    var buf = List[UInt8](capacity=max_bytes)
+    for _ in range(max_bytes):
+        buf.append(0)
+    var received = external_call[
+        "recv", c_ssize_t,
+        c_int, Pointer[UInt8, origin_of(buf)], c_size_t, c_int,
+    ](fd, buf.unsafe_ptr(), c_size_t(max_bytes), MSG_DONTWAIT)
+    var count = Int(received)
+    if count <= 0:
+        return out^
+    for i in range(count):
+        out.append(buf[i])
+    return out^
+
+
+def _connection_has_token(value: String, token: String) -> Bool:
+    var parts = value.split(String(","))
+    for part in parts:
+        if String(part).strip().lower() == token:
+            return True
+    return False
+
+
+def wants_keep_alive(req: Request) -> Bool:
+    """Return the HTTP-version-aware persistence policy for `req`.
+
+    HTTP/1.1 persists unless `Connection: close`; HTTP/1.0 persists only with
+    an explicit `Connection: keep-alive` token. Unknown versions are closed.
+    """
+    var connection = req.header(String("Connection"))
+    if _connection_has_token(connection, String("close")):
+        return False
+    if req.version == "HTTP/1.1":
+        return True
+    if req.version == "HTTP/1.0":
+        return _connection_has_token(connection, String("keep-alive"))
+    return False
 
 
 def socket_peer_ip(fd: c_int) -> String:
@@ -223,7 +288,7 @@ def read_request(fd: c_int, max_body_bytes: Int = DEFAULT_MAX_BODY_BYTES) -> Lis
     var content_length = -1
     while True:
         var n = external_call[
-            "recv", c_size_t,
+            "recv", c_ssize_t,
             c_int, Pointer[UInt8, origin_of(buf)], c_size_t, c_int,
         ](fd, buf.unsafe_ptr(), c_size_t(READ_BUFFER_SIZE), c_int(0))
         var got = Int(n)
@@ -259,7 +324,7 @@ def write_all(fd: c_int, mut data: List[UInt8]) -> None:
     var n = len(data)
     while total < n:
         var sent = external_call[
-            "send", c_size_t,
+            "send", c_ssize_t,
             c_int, Pointer[UInt8, origin_of(data)], c_size_t, c_int,
         ](fd, data.unsafe_ptr().unsafe_offset(total), c_size_t(n - total), c_int(0))
         if Int(sent) <= 0:

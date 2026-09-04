@@ -19,6 +19,7 @@ struct Request(Copyable, Movable):
     var body: String
     var headers: Dict[String, String]
     var peer: String                  # kernel-reported client IP (getpeername); "" if unknown
+    var version: String               # request-line protocol token, normally HTTP/1.1
 
     def __init__(out self):
         self.method = String("GET")
@@ -27,6 +28,7 @@ struct Request(Copyable, Movable):
         self.body = String()
         self.headers = Dict[String, String]()
         self.peer = String()
+        self.version = String("HTTP/1.1")
 
     def __init__(
         out self,
@@ -35,6 +37,7 @@ struct Request(Copyable, Movable):
         query: String,
         body: String,
         var headers: Dict[String, String],
+        version: String = "HTTP/1.1",
     ):
         self.method = method
         self.path = path
@@ -42,6 +45,7 @@ struct Request(Copyable, Movable):
         self.body = body
         self.headers = headers^
         self.peer = String()
+        self.version = version
 
     def header(self, name: String) -> String:
         """Case-insensitive lookup. Returns empty string if absent."""
@@ -195,7 +199,18 @@ def parse_request(req_bytes: List[UInt8], peer: String = String()) raises -> Req
         r.path = String(full_path[byte=0:qmark])
         r.query = String(full_path[byte=qmark + 1:])
 
-    # Skip "HTTP/1.1\r\n".
+    # Protocol version from the remainder of the request line.
+    if i < n and req_bytes[i] == UInt8(32):
+        i += 1
+        var version = String()
+        while i < n and req_bytes[i] != UInt8(13) and req_bytes[i] != UInt8(10) \
+            and req_bytes[i] != UInt8(32):
+            version += chr(Int(req_bytes[i]))
+            i += 1
+        if version.byte_length() > 0:
+            r.version = version^
+
+    # Skip to the first header line.
     while i < n and req_bytes[i] != UInt8(10):
         i += 1
     if i < n:
