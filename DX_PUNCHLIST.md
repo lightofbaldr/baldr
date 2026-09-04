@@ -77,13 +77,14 @@ biggest gaps close in one pass. Until then, the workarounds below are correct; d
 
 ## P1 — Correctness & production-readiness
 
-- **Config is 70% ignored.** `ServerConfig.from_env()` parses 7 vars; `App.run` consumes only
-  `host`/`port`. `DEBUG`, `WORKERS`, `MAX_BODY_BYTES`, `STATIC_DIR`, `TEMPLATE_DIR` are handed back
-  as dead struct fields. Add `App.run(config: ServerConfig)`. `config.mojo` vs `app.mojo`.
-- **`MAX_BODY_BYTES` is not enforced** — parsed but no consumer, so a large POST reads unbounded.
-  Enforce in the request parser, return 413. `config.mojo` (no consumer in http/request).
-- **`app.assets(url_prefix=...)` silently ignores `url_prefix`** — dispatch matches on
-  `manifest.has_url(req.path)` regardless. Either honor it or drop the param. `app.mojo`:125-182.
+- ~~**Config is 70% ignored.**~~ ✅ **SHIPPED 2026-09-04.** `App.configure(cfg)` + `app.run(handler, cfg)`
+  consume host/port/workers/max_body_bytes/debug/static_dir; `template_dir` is documented as the value
+  for `Templates(...)`.
+- ~~**`MAX_BODY_BYTES` is not enforced**~~ ✅ **SHIPPED 2026-09-04.** The connection loop answers
+  `413 Payload Too Large` from the declared `Content-Length` before reading a body byte (and `431` for
+  a header block over 64 KiB); `tests/test_app_config.mojo`.
+- ~~**`app.assets(url_prefix=...)` silently ignores `url_prefix`**~~ ✅ **SHIPPED 2026-09-04.** Only paths
+  under the mount prefix (segment boundary) are considered; a manifest URL mounted elsewhere falls through.
 - **Templates load relative to CWD, not the binary** — running the "one static binary" from anywhere
   but the project root raises `template not found`. Breaks the core promise. Resolve relative to the
   executable, or compile templates in. `templates.mojo`:58-68.

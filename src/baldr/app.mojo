@@ -51,6 +51,7 @@ from .http import (
     socket_bind, socket_listen, socket_accept, socket_close,
     socket_recv_timeout,
     read_request, read_request_from, write_all, socket_peer_ip, wants_keep_alive,
+    READ_OK, READ_DONE, READ_BODY_TOO_LARGE, READ_HEADERS_TOO_LARGE, DEFAULT_MAX_BODY_BYTES,
     process_fork, process_getpid, process_kill, process_waitpid,
     process_waitpid_nohang, process_exit, signal_install, signal_pending,
     signal_replace_pipe,
@@ -58,6 +59,8 @@ from .http import (
     READ_TIMEOUT_SECS, KEEPALIVE_IDLE_SECS,
 )
 from .streaming import ResponseStream
+from .config import ServerConfig
+from std.os.path import isdir
 from .request import Request, parse_request
 from .response import Response
 from .router import (
@@ -144,6 +147,9 @@ struct App[
     var middleware: Self.M
     var errors: Self.E
     var lifecycle: Self.L
+    var max_body_bytes: Int      # declared Content-Length above this -> 413 (ServerConfig.max_body_bytes)
+    var asset_prefix: String     # the URL prefix `assets()` was mounted at
+    var debug: Bool              # log handler exceptions server-side (ServerConfig.debug)
 
     # ── Constructors ─────────────────────────────────────────────────────
     # Every part is optional; a part you don't pass is default-constructed,
@@ -157,6 +163,9 @@ struct App[
         self.has_router = False
         self.has_assets = False
         self.asset_manifest = AssetManifest()
+        self.max_body_bytes = DEFAULT_MAX_BODY_BYTES
+        self.asset_prefix = String("/static")
+        self.debug = False
         self.middleware = Self.M()
         self.errors = Self.E()
         self.lifecycle = Self.L()
@@ -167,6 +176,9 @@ struct App[
         self.has_router = False
         self.has_assets = False
         self.asset_manifest = AssetManifest()
+        self.max_body_bytes = DEFAULT_MAX_BODY_BYTES
+        self.asset_prefix = String("/static")
+        self.debug = False
         self.middleware = middleware^
         self.errors = Self.E()
         self.lifecycle = Self.L()
@@ -177,6 +189,9 @@ struct App[
         self.has_router = False
         self.has_assets = False
         self.asset_manifest = AssetManifest()
+        self.max_body_bytes = DEFAULT_MAX_BODY_BYTES
+        self.asset_prefix = String("/static")
+        self.debug = False
         self.middleware = middleware^
         self.errors = errors^
         self.lifecycle = Self.L()
@@ -187,6 +202,9 @@ struct App[
         self.has_router = False
         self.has_assets = False
         self.asset_manifest = AssetManifest()
+        self.max_body_bytes = DEFAULT_MAX_BODY_BYTES
+        self.asset_prefix = String("/static")
+        self.debug = False
         self.middleware = middleware^
         self.errors = errors^
         self.lifecycle = lifecycle^
@@ -197,6 +215,9 @@ struct App[
         self.has_router = False
         self.has_assets = False
         self.asset_manifest = AssetManifest()
+        self.max_body_bytes = DEFAULT_MAX_BODY_BYTES
+        self.asset_prefix = String("/static")
+        self.debug = False
         self.middleware = Self.M()
         self.errors = errors^
         self.lifecycle = Self.L()
@@ -207,6 +228,9 @@ struct App[
         self.has_router = False
         self.has_assets = False
         self.asset_manifest = AssetManifest()
+        self.max_body_bytes = DEFAULT_MAX_BODY_BYTES
+        self.asset_prefix = String("/static")
+        self.debug = False
         self.middleware = Self.M()
         self.errors = Self.E()
         self.lifecycle = lifecycle^
@@ -217,6 +241,9 @@ struct App[
         self.has_router = False
         self.has_assets = False
         self.asset_manifest = AssetManifest()
+        self.max_body_bytes = DEFAULT_MAX_BODY_BYTES
+        self.asset_prefix = String("/static")
+        self.debug = False
         self.middleware = Self.M()
         self.errors = errors^
         self.lifecycle = lifecycle^
@@ -227,6 +254,9 @@ struct App[
         self.has_router = False
         self.has_assets = False
         self.asset_manifest = AssetManifest()
+        self.max_body_bytes = DEFAULT_MAX_BODY_BYTES
+        self.asset_prefix = String("/static")
+        self.debug = False
         self.middleware = middleware^
         self.errors = Self.E()
         self.lifecycle = lifecycle^
@@ -268,6 +298,7 @@ struct App[
         registered via `static()` still win over everything; this asset mount
         is consulted after static mounts and before routes/handler."""
         self.has_assets = True
+        self.asset_prefix = url_prefix
         self.asset_manifest = manifest^
 
     # ── Static + asset dispatch ──────────────────────────────────────────
@@ -299,6 +330,10 @@ struct App[
         a manifest URL — callers fall through to routes/handler."""
         if not self.has_assets:
             raise Error(String("baldr: no asset mount"))
+        # Only paths under the mount prefix are ours (segment boundary, like
+        # static mounts); everything else falls through.
+        if not (req.path == self.asset_prefix or req.path.startswith(self.asset_prefix + "/")):
+            raise Error(String("baldr: path outside the asset mount"))
         # Only manifest URLs are ours; everything else falls through.
         if not self.asset_manifest.has_url(req.path):
             raise Error(String("baldr: asset not in manifest"))
@@ -362,6 +397,8 @@ struct App[
             self.middleware.after(req, resp)
             return resp^
         except e:
+            if self.debug:
+                print("[baldr] 500 " + req.method + " " + req.path + ": " + String(e))
             return self.errors.render_error(500, String("Internal Server Error"), req)
 
     def handle[H: RouteHandler](mut self, mut handler: H, req: Request) raises -> Response:
@@ -384,6 +421,8 @@ struct App[
             self.middleware.after(req, resp)
             return resp^
         except e:
+            if self.debug:
+                print("[baldr] 500 " + req.method + " " + req.path + ": " + String(e))
             return self.errors.render_error(500, String("Internal Server Error"), req)
 
     def _respond[H: RouteHandler](mut self, mut handler: H, raw: List[UInt8], peer: String) raises -> Response:
@@ -416,10 +455,17 @@ struct App[
     # HTTP/1.0 opt-in). The caller owns and closes the descriptor.
 
     def _read_one(self, fd: c_int, first: Bool, mut pending: List[UInt8], mut req: Request) -> Int:
-        """0 = connection done (EOF / timeout / oversize), 1 = parsed into
-        `req`, 2 = bytes arrived but did not parse. `pending` carries any
-        pipelined bytes between calls."""
-        var raw = read_request_from(fd, pending, timeout_secs=READ_TIMEOUT_SECS if first else KEEPALIVE_IDLE_SECS)
+        """0 = connection done (EOF / timeout), 1 = parsed into `req`,
+        2 = bytes arrived but did not parse (400), 3 = declared body over
+        `max_body_bytes` (413), 4 = header block over the cap (431). `pending`
+        carries any pipelined bytes between calls."""
+        var status = READ_OK
+        var raw = read_request_from(fd, pending, status, max_body_bytes=self.max_body_bytes,
+                                    timeout_secs=READ_TIMEOUT_SECS if first else KEEPALIVE_IDLE_SECS)
+        if status == READ_BODY_TOO_LARGE:
+            return 3
+        if status == READ_HEADERS_TOO_LARGE:
+            return 4
         if len(raw) == 0:
             return 0
         try:
@@ -427,6 +473,23 @@ struct App[
             return 1
         except:
             return 2
+
+    def _reject(self, fd: c_int, state: Int, req: Request):
+        """Answer an unreadable request (400 / 413 / 431) and let the caller close."""
+        var code = 400
+        var text = String("Bad Request")
+        if state == 3:
+            code = 413
+            text = String("Payload Too Large")
+        elif state == 4:
+            code = 431
+            text = String("Request Header Fields Too Large")
+        try:
+            var bad = self.errors.render_error(code, text, req)
+            var bad_bytes = bad.to_bytes(False)
+            write_all(fd, bad_bytes)
+        except:
+            pass
 
     def _serve_connection_buffered[H: RouteHandler](mut self, fd: c_int, mut handler: H, use_router: Bool) raises:
         var first = True
@@ -437,10 +500,8 @@ struct App[
             first = False
             if state == 0:
                 return
-            if state == 2:
-                var bad = self.errors.render_error(400, String("Bad Request"), req)
-                var bad_bytes = bad.to_bytes(False)
-                write_all(fd, bad_bytes)
+            if state >= 2:
+                self._reject(fd, state, req)
                 return
             var keep = wants_keep_alive(req)
             var resp = self._pipeline(handler, req, use_router)
@@ -466,10 +527,8 @@ struct App[
             first = False
             if state == 0:
                 return
-            if state == 2:
-                var bad = self.errors.render_error(400, String("Bad Request"), req)
-                var bad_bytes = bad.to_bytes(False)
-                write_all(fd, bad_bytes)
+            if state >= 2:
+                self._reject(fd, state, req)
                 return
             var keep = wants_keep_alive(req)
             var resp = self.handle(handler, req)
@@ -492,10 +551,8 @@ struct App[
             first = False
             if state == 0:
                 return
-            if state == 2:
-                var bad = self.errors.render_error(400, String("Bad Request"), req)
-                var bad_bytes = bad.to_bytes(False)
-                write_all(fd, bad_bytes)
+            if state >= 2:
+                self._reject(fd, state, req)
                 return
             var keep = wants_keep_alive(req)
             var buffered = Response()
@@ -757,6 +814,31 @@ struct App[
         and middleware `before` still apply; `workers > 1` preforks.
         `grace_secs` bounds graceful worker drain on shutdown."""
         self._serve_loop_stream(handler^, host, port, workers, grace_secs)
+
+    # ── Configuration ────────────────────────────────────────────────────
+    def configure(mut self, config: ServerConfig):
+        """Apply a `ServerConfig`: the body cap (`max_body_bytes` -> 413 above
+        it), `debug` (log handler exceptions server-side), and a static mount
+        of `static_dir` at `/static` when that directory exists. `host`,
+        `port` and `workers` are consumed by `run(handler, config)`;
+        `template_dir` is for your `Templates(...)` constructor."""
+        self.max_body_bytes = config.max_body_bytes
+        self.debug = config.debug
+        if config.static_dir.byte_length() > 0 and isdir(config.static_dir):
+            self.static(String("/static"), config.static_dir)
+
+    def run[H: RouteHandler](mut self, var handler: H, config: ServerConfig, grace_secs: Int = 5) raises:
+        """`configure(config)` then `run(handler, config.host, config.port, config.workers)`."""
+        self.configure(config)
+        self.run(handler^, config.host, config.port, config.workers, grace_secs)
+
+    def run[H: DispatchHandler](mut self, var handler: H, config: ServerConfig, grace_secs: Int = 5) raises:
+        self.configure(config)
+        self.run(handler^, config.host, config.port, config.workers, grace_secs)
+
+    def run[H: StreamHandler](mut self, var handler: H, config: ServerConfig, grace_secs: Int = 5) raises:
+        self.configure(config)
+        self.run(handler^, config.host, config.port, config.workers, grace_secs)
 
     # ── Deprecated v0.1 runners ──────────────────────────────────────────
     # Kept so every v0.1 call site still compiles. Each is the one `run`

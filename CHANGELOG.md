@@ -5,6 +5,13 @@ Newest entries first.
 
 ## One `run`: the App carries its parts (2026-09-04)
 
+- **`ServerConfig` is consumed.** `App.configure(cfg)` and `app.run(handler,
+  cfg)` apply `max_body_bytes`, `debug` and `static_dir`, and bind with
+  `host`/`port`/`workers`. A declared `Content-Length` over the cap is answered
+  `413 Payload Too Large` before any body byte is read; a header block over
+  64 KiB gets `431`. `app.assets(manifest, url_prefix)` now honours the prefix.
+  New suite `tests/test_app_config.mojo` (12 checks). Three P1 items close.
+
 - **Prefork supervision and graceful shutdown.** `run(..., workers=N,
   grace_secs=5)` catches SIGTERM/SIGINT process-wide with a minimal handler
   that writes to a per-process self-pipe; App logic polls outside signal

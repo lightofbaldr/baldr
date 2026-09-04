@@ -351,6 +351,33 @@ app.get("/users/{id}", "user_detail")
 app.run(Api(), port=8080)
 ```
 
+## `configure` and `run(handler, config)`
+
+```mojo
+def configure(mut self, config: ServerConfig)
+def run[H: RouteHandler](mut self, var handler: H, config: ServerConfig, grace_secs: Int = 5) raises
+def run[H: DispatchHandler](mut self, var handler: H, config: ServerConfig, grace_secs: Int = 5) raises
+def run[H: StreamHandler](mut self, var handler: H, config: ServerConfig, grace_secs: Int = 5) raises
+```
+
+`ServerConfig.from_env()` is now consumed in full. `configure` applies
+`max_body_bytes` (a request whose declared `Content-Length` exceeds it is
+answered `413 Payload Too Large` and the connection closed, before a body
+byte is read), `debug` (handler exceptions are logged server-side as
+`[baldr] 500 METHOD /path: message`; clients still get the error handler's
+response), and mounts `static_dir` at `/static` when that directory exists.
+`run(handler, config)` calls `configure` and then `run` with `config.host`,
+`config.port` and `config.workers`. `template_dir` is yours to hand to
+`Templates(...)`. A header block over 64 KiB is answered `431`.
+
+```mojo
+var cfg = ServerConfig.from_env()
+var app = App(errors=JsonErrorHandler())
+app.run(Api(), cfg)
+```
+
+The fields are public: `app.max_body_bytes`, `app.debug`, `app.asset_prefix`.
+
 ## `handle`
 
 ```mojo

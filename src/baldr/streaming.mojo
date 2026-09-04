@@ -214,6 +214,7 @@ def _status_text(code: Int) -> String:
     if code == 413: return String("413 Payload Too Large")
     if code == 422: return String("422 Unprocessable Entity")
     if code == 429: return String("429 Too Many Requests")
+    if code == 431: return String("431 Request Header Fields Too Large")
     if code == 500: return String("500 Internal Server Error")
     if code == 502: return String("502 Bad Gateway")
     if code == 503: return String("503 Service Unavailable")

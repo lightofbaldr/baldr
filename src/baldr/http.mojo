@@ -459,9 +459,16 @@ def read_request(fd: c_int, max_body_bytes: Int = DEFAULT_MAX_BODY_BYTES, timeou
     return out^
 
 
+comptime READ_OK: Int = 0            # one request returned
+comptime READ_DONE: Int = 1          # EOF / timeout: the connection is finished
+comptime READ_BODY_TOO_LARGE: Int = 2    # declared Content-Length over max_body_bytes -> 413
+comptime READ_HEADERS_TOO_LARGE: Int = 3 # header block over MAX_HEADER_BYTES -> 431
+
+
 def read_request_from(
     fd: c_int,
     mut pending: List[UInt8],
+    mut status: Int,
     max_body_bytes: Int = DEFAULT_MAX_BODY_BYTES,
     timeout_secs: Int = READ_TIMEOUT_SECS,
 ) -> List[UInt8]:
@@ -470,9 +477,12 @@ def read_request_from(
     Like `read_request`, but consumes only the first complete request from
     the socket and leaves any bytes after it (a pipelined next request) in
     `pending`, which the caller passes back in on the next call. Returns an
-    empty list when the connection is done (EOF, timeout, or a request over
-    the header/body caps — in which case the caller should close).
+    empty list when no request was returned, with `status` saying why:
+    `READ_DONE` (EOF / timeout), `READ_BODY_TOO_LARGE` (the declared
+    Content-Length exceeds `max_body_bytes`; answer 413 and close) or
+    `READ_HEADERS_TOO_LARGE` (answer 431 and close). `READ_OK` otherwise.
     """
+    status = READ_OK
     _ = socket_recv_timeout(fd, timeout_secs)
     var buf = List[UInt8](capacity=READ_BUFFER_SIZE)
     for _ in range(READ_BUFFER_SIZE):
@@ -483,6 +493,7 @@ def read_request_from(
             var content_length = _content_length(pending, header_end)
             if content_length > max_body_bytes:
                 pending = List[UInt8]()
+                status = READ_BODY_TOO_LARGE
                 return List[UInt8]()
             var total = header_end + (content_length if content_length > 0 else 0)
             if len(pending) >= total:
@@ -496,6 +507,7 @@ def read_request_from(
                 return one^
         elif len(pending) > MAX_HEADER_BYTES:
             pending = List[UInt8]()
+            status = READ_HEADERS_TOO_LARGE
             return List[UInt8]()
         var n = external_call[
             "recv", c_ssize_t,
@@ -504,6 +516,7 @@ def read_request_from(
         var got = Int(n)
         if got <= 0:
             pending = List[UInt8]()
+            status = READ_DONE
             return List[UInt8]()
         for i in range(got):
             pending.append(buf[i])

@@ -12,7 +12,7 @@ from baldr.config import ServerConfig
 def main() raises:
     var cfg = ServerConfig.from_env()
     var app = App()
-    app.run(MyApp(), port=cfg.port)
+    app.run(MyApp(), cfg)          # host, port, workers, max_body_bytes, debug, static_dir
 ```
 
 Each field has a default, so an empty environment still boots:
@@ -26,6 +26,12 @@ Each field has a default, so an empty environment still boots:
 | `max_body_bytes` | `MAX_BODY_BYTES` | `10485760` (10 MiB) |
 | `static_dir` | `STATIC_DIR` | `./static` |
 | `template_dir` | `TEMPLATE_DIR` | `./templates` |
+
+What each field does when you `app.run(handler, cfg)`: `host`/`port`/`workers`
+bind and prefork; `max_body_bytes` caps the declared request body (over it →
+`413 Payload Too Large`, connection closed, no body bytes read); `debug` logs
+handler exceptions server-side; `static_dir` is mounted at `/static` when the
+directory exists; `template_dir` is the value to pass to `Templates(...)`.
 
 !!! note "Typed, not stringly"
     `cfg.port` is an `Int` and `cfg.debug` is a `Bool` — parsed and checked at startup, not re-parsed on every request. `from_env()` is `raises` because a malformed value (e.g. `PORT=banana`) should fail loud at boot, not silently at request time.
