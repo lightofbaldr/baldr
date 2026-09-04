@@ -50,3 +50,4 @@ build = "echo 'phase 5 — examples; `pixi run examples` builds all three under 
 [dependencies]
 mojo = "==1.0.0"
 max  = "==26.5.0"
+libsqlite = ">=3.45"   # baldr.db: libsqlite3.so.0 for the sqlite FFI
