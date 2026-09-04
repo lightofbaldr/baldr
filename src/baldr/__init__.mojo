@@ -9,6 +9,7 @@ Public API as of Phase 5:
   from baldr.app        import App, DispatchHandler, RouteHandler
   from baldr.request    import Request
   from baldr.response   import Response, Header
+  from baldr.streaming  import ResponseStream
   from baldr.router     import Params, Router, RoutePattern, Match
   from baldr.cookies    import Cookie, SetCookie, parse_cookies
   from baldr.validation import Required, StringLength, FieldType, validate_json

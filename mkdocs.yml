@@ -67,6 +67,7 @@ nav:
       - Concurrency: guide/concurrency.md
       - Config & Error Handling: guide/config-errors.md
       - SQLite Database: guide/db.md
+      - Streaming Responses: guide/streaming.md
       - The GPU Queue: guide/queue.md
   - Deploy: deploy.md
   - Reference:
